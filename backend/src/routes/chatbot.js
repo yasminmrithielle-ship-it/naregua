@@ -4,6 +4,7 @@ import { pool, query } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { requireChatbotInternal } from "../middleware/chatbotInternal.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { buildPublicChatbotUrl } from "../config.js";
 import { ensureDefaultServices } from "../services/serviceCatalog.js";
 import {
   cancelAppointmentReminders,
@@ -40,6 +41,15 @@ const syncSchema = z.object({
 function asExecutor(client) {
   return {
     query: (text, params) => client.query(text, params)
+  };
+}
+
+function withPublicChatbotUrls(connection) {
+  return {
+    ...connection,
+    qrPageUrl: buildPublicChatbotUrl(`/chatbot/connections/${connection.session_name}/qr`),
+    qrImageUrl: buildPublicChatbotUrl(`/chatbot/connections/${connection.session_name}/qr.png`),
+    statusUrl: buildPublicChatbotUrl(`/chatbot/connections/${connection.session_name}/status`)
   };
 }
 
@@ -106,14 +116,7 @@ router.get("/barbershop/context", requireAuth, asyncHandler(async (req, res) => 
     membership: req.auth.membership,
     barbershop: req.auth.barbershop,
     chatbotSettings: settingsResult.rows[0] || null,
-    whatsappConnection: connection
-      ? {
-          ...connection,
-          qrPageUrl: `/chatbot/connections/${connection.session_name}/qr`,
-          qrImageUrl: `/chatbot/connections/${connection.session_name}/qr.png`,
-          statusUrl: `/chatbot/connections/${connection.session_name}/status`
-        }
-      : null
+    whatsappConnection: connection ? withPublicChatbotUrls(connection) : null
   });
 }));
 
@@ -124,12 +127,7 @@ router.get("/chatbot/connection", requireAuth, asyncHandler(async (req, res) => 
     return res.status(404).json({ error: "Nenhuma conexao WhatsApp cadastrada para esta conta." });
   }
 
-  return res.json({
-    ...connection,
-    qrPageUrl: `/chatbot/connections/${connection.session_name}/qr`,
-    qrImageUrl: `/chatbot/connections/${connection.session_name}/qr.png`,
-    statusUrl: `/chatbot/connections/${connection.session_name}/status`
-  });
+  return res.json(withPublicChatbotUrls(connection));
 }));
 
 router.get("/internal/chatbot/connections", requireChatbotInternal, asyncHandler(async (_req, res) => {

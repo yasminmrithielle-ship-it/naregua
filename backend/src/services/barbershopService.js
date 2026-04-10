@@ -158,6 +158,74 @@ export async function provisionBarbershopScaffold(
   };
 }
 
+export async function ensureChatbotScaffoldForActiveBarbershops(executor = { query }) {
+  await executor.query(
+    `
+      INSERT INTO chatbot_configuracoes (
+        barbearia_id,
+        assistant_name,
+        welcome_message,
+        off_hours_message,
+        cancellation_message,
+        reschedule_message,
+        tone_of_voice,
+        custom_instructions,
+        allow_cancellation,
+        allow_reschedule
+      )
+      SELECT
+        b.id,
+        'Assistente da barbearia',
+        'Ola! Seja bem-vindo(a) a ' || b.nome || '. Como posso ajudar com seu agendamento hoje?',
+        'No momento estamos fora do horario de atendimento. Responderemos assim que possivel.',
+        'Seu agendamento foi cancelado com sucesso.',
+        'Vamos remarcar seu horario. Informe uma nova data desejada.',
+        'friendly',
+        NULL,
+        true,
+        true
+      FROM barbearias b
+      WHERE b.status = 'active'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM chatbot_configuracoes c
+          WHERE c.barbearia_id = b.id
+        )
+    `
+  );
+
+  await executor.query(
+    `
+      INSERT INTO conexoes_whatsapp (
+        barbearia_id,
+        session_name,
+        phone_number,
+        provider,
+        status,
+        webhook_secret,
+        ativo
+      )
+      SELECT
+        b.id,
+        COALESCE(NULLIF(b.slug, ''), b.id),
+        b.whatsapp_number,
+        'whatsapp-web.js',
+        'disconnected',
+        gen_random_uuid()::text,
+        true
+      FROM barbearias b
+      WHERE b.status = 'active'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM conexoes_whatsapp c
+          WHERE c.barbearia_id = b.id
+            AND c.ativo = true
+        )
+      ON CONFLICT (session_name) DO NOTHING
+    `
+  );
+}
+
 export async function getBarbershopById(barbershopId) {
   const result = await query(
     `

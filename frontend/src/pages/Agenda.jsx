@@ -41,16 +41,34 @@ function appendCacheBuster(url, token) {
   return `${url}${separator}t=${token}`;
 }
 
-function WhatsAppQrModal({ isOpen, onClose, qrPageUrl, qrImageUrl, sessionName }) {
+function getWhatsappStatusLabel(status) {
+  if (status === "connected" || status === "conectado") return "conectado";
+  if (status === "qr_disponivel") return "QR disponivel";
+  if (status === "disconnected") return "desconectado";
+  if (status === "disabled") return "desativado";
+  return status || "aguardando QR";
+}
+
+function WhatsAppQrModal({
+  isOpen,
+  onClose,
+  qrPageUrl,
+  qrImageUrl,
+  sessionName,
+  connectionStatus
+}) {
   const [refreshToken, setRefreshToken] = useState(() => Date.now());
+  const [imageFailed, setImageFailed] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
       return;
     }
 
+    setImageFailed(false);
     setRefreshToken(Date.now());
     const timer = window.setInterval(() => {
+      setImageFailed(false);
       setRefreshToken(Date.now());
     }, 15000);
 
@@ -60,6 +78,13 @@ function WhatsAppQrModal({ isOpen, onClose, qrPageUrl, qrImageUrl, sessionName }
   if (!isOpen) return null;
 
   const qrImageSrc = appendCacheBuster(qrImageUrl, refreshToken);
+  const isConnected = connectionStatus === "connected" || connectionStatus === "conectado";
+  const statusLabel = getWhatsappStatusLabel(connectionStatus);
+
+  function handleRefresh() {
+    setImageFailed(false);
+    setRefreshToken(Date.now());
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/45 p-4 backdrop-blur-sm">
@@ -80,7 +105,7 @@ function WhatsAppQrModal({ isOpen, onClose, qrPageUrl, qrImageUrl, sessionName }
           <div className="flex flex-wrap gap-3">
             <button
               className="rounded-full border border-ink/10 px-4 py-2 text-sm text-ink/70 transition hover:bg-ink hover:text-cream"
-              onClick={() => setRefreshToken(Date.now())}
+              onClick={handleRefresh}
               type="button"
             >
               Atualizar QR
@@ -105,11 +130,27 @@ function WhatsAppQrModal({ isOpen, onClose, qrPageUrl, qrImageUrl, sessionName }
 
         <div className="mt-6 rounded-[28px] border border-ink/8 bg-gradient-to-b from-[#fbf7f0] to-white p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
           <div className="mx-auto flex max-w-md flex-col items-center gap-4 rounded-[24px] border border-ink/8 bg-white px-6 py-8 text-center shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
-            <img
-              alt="QR Code do WhatsApp"
-              className="w-full max-w-[320px] rounded-[24px] border border-ink/8 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)]"
-              src={qrImageSrc}
-            />
+            {isConnected ? (
+              <div className="w-full rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-6 text-sm text-emerald-800">
+                WhatsApp conectado. O QR so aparece quando uma nova autenticacao e necessaria.
+              </div>
+            ) : imageFailed || !qrImageSrc ? (
+              <div className="w-full rounded-2xl border border-amber-200 bg-amber-50 px-5 py-6 text-sm text-amber-800">
+                QR ainda nao disponivel neste servico. Aguarde alguns segundos e clique em
+                {" "}
+                <strong>Atualizar QR</strong>.
+              </div>
+            ) : (
+              <img
+                alt="QR Code do WhatsApp"
+                className="w-full max-w-[320px] rounded-[24px] border border-ink/8 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)]"
+                onError={() => setImageFailed(true)}
+                src={qrImageSrc}
+              />
+            )}
+            <p className="text-xs uppercase tracking-[0.25em] text-ink/45">
+              Status: {statusLabel}
+            </p>
             <p className="text-sm text-ink/60">
               Se o QR nao aparecer de primeira, aguarde alguns segundos ou clique em
               {" "}
@@ -482,6 +523,7 @@ export default function Agenda() {
         qrPageUrl={qrPageUrl}
         qrImageUrl={qrImageUrl}
         sessionName={whatsappConnection?.session_name}
+        connectionStatus={whatsappConnection?.status}
       />
 
       <div className="glass rounded-3xl p-8 shadow-soft">

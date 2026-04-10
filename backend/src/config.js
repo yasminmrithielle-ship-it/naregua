@@ -27,6 +27,51 @@ export function getPublicApiUrl() {
   return process.env.API_URL || "";
 }
 
+function normalizePublicUrl(value) {
+  const raw = String(value || "").trim().replace(/\/+$/, "");
+
+  if (!raw || raw.includes("SEU-") || raw.includes("seudominio.com")) {
+    return "";
+  }
+
+  try {
+    return new URL(raw).origin;
+  } catch (error) {
+    return raw;
+  }
+}
+
+export function getPublicChatbotUrl() {
+  const candidates = [
+    process.env.CHATBOT_PUBLIC_URL || "",
+    process.env.VITE_CHATBOT_URL || "",
+    process.env.CHATBOT_WEBHOOK_URL || ""
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizePublicUrl(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+export function buildPublicChatbotUrl(path = "") {
+  const baseUrl = getPublicChatbotUrl();
+
+  if (!path) {
+    return baseUrl;
+  }
+
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+
+  return baseUrl ? `${baseUrl}${path}` : path;
+}
+
 export function getDatabaseUrl() {
   return process.env.DATABASE_URL || "";
 }
@@ -84,6 +129,7 @@ export function getRuntimeSummary() {
 
   return {
     apiUrl: getPublicApiUrl(),
+    chatbotUrl: getPublicChatbotUrl(),
     databaseHost,
     chatbotEnabled: getChatbotEnabled(),
     hasDatabaseUrl: Boolean(databaseUrl),
@@ -161,6 +207,12 @@ export function validateRuntimeConfig() {
   if (getChatbotEnabled() && getChatbotInternalSecret() === DEFAULT_CHATBOT_SECRET) {
     warnings.push(
       "CHATBOT_INTERNAL_SECRET esta com o valor padrao. Troque antes de expor o ambiente em producao."
+    );
+  }
+
+  if (!getChatbotEnabled() && !getPublicChatbotUrl()) {
+    warnings.push(
+      "CHATBOT_PUBLIC_URL/VITE_CHATBOT_URL nao configurado. O painel so exibira QR se o chatbot estiver integrado neste mesmo servico."
     );
   }
 

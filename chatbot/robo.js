@@ -1,6 +1,17 @@
 const http = require("http");
 const path = require("path");
 const { URL } = require("url");
+
+if (require.main === module && typeof process.loadEnvFile === "function") {
+  try {
+    process.loadEnvFile(path.join(__dirname, ".env"));
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.log("Falha ao carregar chatbot/.env:", error.message);
+    }
+  }
+}
+
 const qrcode = require("qrcode-terminal");
 const QRCode = require("qrcode");
 const { Client, LocalAuth } = require("whatsapp-web.js");

@@ -24,6 +24,7 @@ import {
   validateRuntimeConfig
 } from "./config.js";
 import { ensureSeedData } from "./services/authService.js";
+import { ensureChatbotScaffoldForActiveBarbershops } from "./services/barbershopService.js";
 
 dotenv.config();
 
@@ -228,6 +229,7 @@ async function bootstrap() {
   const validation = validateRuntimeConfig();
   const runtimeSummary = getRuntimeSummary();
   let databaseInitialized = false;
+  let startIntegratedChatbot = null;
 
   startupState.warnings = [...validation.warnings];
   startupState.errors = [...validation.errors];
@@ -249,6 +251,7 @@ async function bootstrap() {
     try {
       await initializeDatabase();
       await ensureSeedData();
+      await ensureChatbotScaffoldForActiveBarbershops();
       startReminders();
       startSlotExpiryMonitor();
       databaseInitialized = true;
@@ -267,9 +270,7 @@ async function bootstrap() {
       const chatbotModule = await import("../../chatbot/robo.js");
       const { initializeChatbot, registerChatbotRoutes } = chatbotModule.default;
       registerChatbotRoutes(app);
-      initializeChatbot().catch((error) => {
-        console.error("Falha ao iniciar chatbot integrado:", error);
-      });
+      startIntegratedChatbot = initializeChatbot;
     } catch (error) {
       console.error("Falha ao carregar chatbot integrado:", error);
       registerDisabledChatbotRoutes(app);
@@ -285,6 +286,12 @@ async function bootstrap() {
   app.listen(port, () => {
     console.log(`API rodando na porta ${port}`);
     console.log(`Chatbot integrado ${chatbotEnabled ? "habilitado" : "desabilitado"}.`);
+
+    if (startIntegratedChatbot) {
+      startIntegratedChatbot().catch((error) => {
+        console.error("Falha ao iniciar chatbot integrado:", error);
+      });
+    }
 
     if (databaseInitialized) {
       console.log("Banco conectado, schema validado e tenant inicial pronto.");

@@ -14,7 +14,7 @@
     "build": "npm run build --workspace frontend",
     "start": "npm run start --workspace backend",
     "chatbot:start": "npm --prefix chatbot start",
-    "chatbot:install": "npm --prefix chatbot install",
+    "chatbot:install": "npm --prefix chatbot ci --omit=dev",
     "mobile:add:android": "npm run cap:add:android --workspace frontend",
     "mobile:copy": "npm run cap:copy --workspace frontend",
     "mobile:sync": "npm run cap:sync --workspace frontend",

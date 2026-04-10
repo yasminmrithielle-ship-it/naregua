@@ -43,6 +43,7 @@ Arquivos de exemplo para deploy:
 - `BARBEARIA_ID`: identificador da barbearia, ex. `default`
 - `BARBEARIA_NOME`: nome exibido no sistema
 - `API_URL`: URL publica da aplicacao, ex. `https://seu-app.railway.app`
+- `CHATBOT_PUBLIC_URL`: URL publica do servico separado do chatbot, ex. `https://seu-chatbot.up.railway.app`
 - `CHATBOT_WEBHOOK_URL`: opcional, URL do webhook do chatbot
 - `CHATBOT_ENABLED`: `false` por padrao no Railway
 
@@ -50,6 +51,7 @@ Arquivos de exemplo para deploy:
 
 - O frontend e compilado no build e servido pelo backend em producao.
 - O frontend usa a mesma origem da aplicacao por padrao, entao `VITE_API_URL` pode ficar vazio.
+- Se o chatbot estiver em outro servico do Railway, configure `CHATBOT_PUBLIC_URL` no servico principal para o painel abrir o QR no dominio certo.
 - O backend aplica o schema automaticamente ao iniciar.
 - O backend valida as variaveis criticas e falha cedo com mensagens mais claras de configuracao.
 - O modulo de WhatsApp foi deixado opcional no servidor para evitar falhas de deploy em ambientes sem Chromium ou sessao persistente.
@@ -113,6 +115,16 @@ Substitua a logica pelo codigo do seu chatbot quando estiver pronto.
 O chatbot foi preparado em `chatbot/robo.js` usando a base enviada por voce.
 Ele conversa com a API para buscar horarios e criar agendamentos.
 
+### Rodar local integrado
+
+1. Configure `backend/.env` com `API_URL=http://localhost:5000`, `CHATBOT_ENABLED=true`, `CHATBOT_PUBLIC_URL=http://localhost:5000`, `CHATBOT_WEBHOOK_URL=http://localhost:5000/webhook` e o mesmo `CHATBOT_INTERNAL_SECRET` usado no chatbot.
+2. Configure `frontend/.env` com `VITE_API_URL=http://localhost:5000` e `VITE_CHATBOT_URL=http://localhost:5000` quando usar `npm run dev --workspace frontend`.
+3. Rode `npm run build` para gerar o painel que o backend serve.
+4. Rode `npm start`.
+5. Abra `http://localhost:5000/qr` ou o botao "Abrir QR do WhatsApp" no painel.
+
+Ao iniciar, o backend garante automaticamente uma configuracao e uma conexao WhatsApp para cada barbearia ativa que ainda nao tiver uma.
+
 ### Publicar chatbot em servico separado no Railway
 
 1. Crie um segundo servico no Railway apontando para este mesmo repositorio.
@@ -121,6 +133,13 @@ Ele conversa com a API para buscar horarios e criar agendamentos.
 4. Configure as variaveis com base em `.env.railway.chatbot.example`.
 5. Aponte `API_URL` para a URL publica do servico principal.
 6. Abra `/qr` na URL do servico do chatbot para autenticar o WhatsApp.
+
+Se o servico do chatbot estiver com Root Directory definido como `chatbot`, use estes comandos no Railway:
+
+- Build command: `npm ci --omit=dev`
+- Start command: `npm start`
+
+Nao use `npm start --workspace=barbearia-chatbot` quando o Root Directory for `chatbot`, porque o npm so encontra workspaces quando o `package.json` da raiz do repositorio tambem esta presente no container.
 
 Variaveis recomendadas para o servico do chatbot:
 
