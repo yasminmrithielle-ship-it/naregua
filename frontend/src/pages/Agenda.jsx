@@ -41,7 +41,7 @@ function appendCacheBuster(url, token) {
   return `${url}${separator}t=${token}`;
 }
 
-function WhatsAppQrModal({ isOpen, onClose, qrPageUrl, sessionName }) {
+function WhatsAppQrModal({ isOpen, onClose, qrPageUrl, qrImageUrl, sessionName }) {
   const [refreshToken, setRefreshToken] = useState(() => Date.now());
 
   useEffect(() => {
@@ -59,17 +59,17 @@ function WhatsAppQrModal({ isOpen, onClose, qrPageUrl, sessionName }) {
 
   if (!isOpen) return null;
 
-  const iframeSrc = appendCacheBuster(qrPageUrl, refreshToken);
+  const qrImageSrc = appendCacheBuster(qrImageUrl, refreshToken);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/45 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-5xl rounded-[28px] border border-white/40 bg-[#fffdf8] p-6 shadow-[0_24px_80px_rgba(17,24,39,0.18)] md:p-8">
+      <div className="w-full max-w-3xl rounded-[28px] border border-white/40 bg-[#fffdf8] p-6 shadow-[0_24px_80px_rgba(17,24,39,0.18)] md:p-8">
         <div className="flex flex-col gap-4 border-b border-ink/5 pb-5 md:flex-row md:items-start md:justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.35em] text-ink/45">WhatsApp</p>
             <h2 className="mt-2 text-3xl font-semibold text-ink">QR Code da conexao</h2>
             <p className="mt-2 text-sm text-ink/60">
-              Escaneie este QR no WhatsApp para conectar a sessao da barbearia sem sair do painel.
+              Escaneie este QR no WhatsApp para conectar o chatbot sem sair do painel.
             </p>
             {sessionName ? (
               <p className="mt-3 text-xs uppercase tracking-[0.25em] text-ink/45">
@@ -78,6 +78,13 @@ function WhatsAppQrModal({ isOpen, onClose, qrPageUrl, sessionName }) {
             ) : null}
           </div>
           <div className="flex flex-wrap gap-3">
+            <button
+              className="rounded-full border border-ink/10 px-4 py-2 text-sm text-ink/70 transition hover:bg-ink hover:text-cream"
+              onClick={() => setRefreshToken(Date.now())}
+              type="button"
+            >
+              Atualizar QR
+            </button>
             <a
               className="rounded-full border border-ink/10 px-4 py-2 text-sm text-ink/70 transition hover:bg-ink hover:text-cream"
               href={qrPageUrl}
@@ -96,12 +103,19 @@ function WhatsAppQrModal({ isOpen, onClose, qrPageUrl, sessionName }) {
           </div>
         </div>
 
-        <div className="mt-6 overflow-hidden rounded-[28px] border border-ink/8 bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
-          <iframe
-            className="h-[540px] w-full bg-[#f6f3ee]"
-            src={iframeSrc}
-            title="QR Code do WhatsApp"
-          />
+        <div className="mt-6 rounded-[28px] border border-ink/8 bg-gradient-to-b from-[#fbf7f0] to-white p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
+          <div className="mx-auto flex max-w-md flex-col items-center gap-4 rounded-[24px] border border-ink/8 bg-white px-6 py-8 text-center shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
+            <img
+              alt="QR Code do WhatsApp"
+              className="w-full max-w-[320px] rounded-[24px] border border-ink/8 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)]"
+              src={qrImageSrc}
+            />
+            <p className="text-sm text-ink/60">
+              Se o QR nao aparecer de primeira, aguarde alguns segundos ou clique em
+              {" "}
+              <strong>Atualizar QR</strong>.
+            </p>
+          </div>
         </div>
       </div>
     </div>
@@ -398,6 +412,9 @@ export default function Agenda() {
   const qrPageUrl = whatsappConnection?.qrPageUrl
     ? buildChatbotUrl(whatsappConnection.qrPageUrl)
     : buildChatbotUrl("/qr");
+  const qrImageUrl = whatsappConnection?.qrImageUrl
+    ? buildChatbotUrl(whatsappConnection.qrImageUrl)
+    : buildChatbotUrl("/qr.png");
 
   async function handleCancel(agendamento) {
     const confirmed = window.confirm(
@@ -463,6 +480,7 @@ export default function Agenda() {
         isOpen={showQrModal}
         onClose={() => setShowQrModal(false)}
         qrPageUrl={qrPageUrl}
+        qrImageUrl={qrImageUrl}
         sessionName={whatsappConnection?.session_name}
       />
 
