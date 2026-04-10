@@ -1,0 +1,14 @@
+node_modules
+dist
+.env
+.env.local
+.DS_Store
+.wwebjs_auth
+.wwebjs_cache
+*.log
+frontend/android/.gradle
+frontend/android/local.properties
+frontend/android/build
+frontend/android/app/build
+frontend/android/capacitor-cordova-android-plugins
+frontend/android/capacitor-cordova-android-plugins-firebase

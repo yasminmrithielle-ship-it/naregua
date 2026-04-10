@@ -1,0 +1,23 @@
+{
+  "name": "agendabarber",
+  "private": true,
+  "version": "1.0.0",
+  "engines": {
+    "node": "20.x"
+  },
+  "workspaces": [
+    "backend",
+    "frontend",
+    "chatbot"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace frontend",
+    "start": "npm run start --workspace backend",
+    "chatbot:start": "npm --prefix chatbot start",
+    "chatbot:install": "npm --prefix chatbot install",
+    "mobile:add:android": "npm run cap:add:android --workspace frontend",
+    "mobile:copy": "npm run cap:copy --workspace frontend",
+    "mobile:sync": "npm run cap:sync --workspace frontend",
+    "mobile:open:android": "npm run cap:open:android --workspace frontend"
+  }
+}

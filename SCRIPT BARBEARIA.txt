@@ -1,0 +1,16 @@
+Insira este modelo de respostas no chatboot !
+
+
+Óla Bem Vindo (a) a (nome da barbearia)!
+
+
+1 . Marcar Horário 
+2 . Desamarcar Horário 
+3 . Falar Com Proprietario 
+
+
+Ao selecionar o numero 1 = Mostre os horarios disponiveis 
+
+Ao selecionar o numero 2 = Desmarque o hórario daquele número 
+
+Ao selecionar o numero 3 = pause o robô naquela conversa por 5 minutos e então o propietario assume !

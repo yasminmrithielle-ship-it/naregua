@@ -1,0 +1,9 @@
+{
+  "appId": "com.barbergo.admin",
+  "appName": "Barber Go",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "cleartext": true
+  }
+}
