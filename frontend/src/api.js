@@ -1,4 +1,5 @@
 const API_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+const CHATBOT_URL = String(import.meta.env.VITE_CHATBOT_URL || "").replace(/\/+$/, "");
 const SESSION_STORAGE_KEY = "barbergo_session";
 const SESSION_EVENT = "barbergo-session-change";
 
@@ -24,6 +25,27 @@ export function buildApiUrl(path = "") {
   }
 
   return `${API_URL}${path}`;
+}
+
+export function buildChatbotUrl(path = "") {
+  if (!path) {
+    return CHATBOT_URL || "";
+  }
+
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+
+  if (CHATBOT_URL) {
+    try {
+      const parsed = new URL(CHATBOT_URL);
+      return `${parsed.origin}${path}`;
+    } catch (error) {
+      return `${CHATBOT_URL}${path}`;
+    }
+  }
+
+  return buildApiUrl(path);
 }
 
 export function getStoredSession() {

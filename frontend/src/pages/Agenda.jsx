@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Topbar from "../components/Topbar.jsx";
-import { apiFetch, buildApiUrl } from "../api.js";
+import { apiFetch, buildChatbotUrl } from "../api.js";
 import { useBarbershop } from "../hooks/useBarbershop.js";
 
 function getToday() {
@@ -30,6 +30,82 @@ function statusBadgeClass(status) {
   if (status === "cancelado") return "bg-rose-100 text-rose-700";
   if (status === "concluido") return "bg-emerald-100 text-emerald-700";
   return "bg-mint/40 text-ink";
+}
+
+function appendCacheBuster(url, token) {
+  if (!url) {
+    return "";
+  }
+
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}t=${token}`;
+}
+
+function WhatsAppQrModal({ isOpen, onClose, qrPageUrl, sessionName }) {
+  const [refreshToken, setRefreshToken] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    setRefreshToken(Date.now());
+    const timer = window.setInterval(() => {
+      setRefreshToken(Date.now());
+    }, 15000);
+
+    return () => window.clearInterval(timer);
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const iframeSrc = appendCacheBuster(qrPageUrl, refreshToken);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/45 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-5xl rounded-[28px] border border-white/40 bg-[#fffdf8] p-6 shadow-[0_24px_80px_rgba(17,24,39,0.18)] md:p-8">
+        <div className="flex flex-col gap-4 border-b border-ink/5 pb-5 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.35em] text-ink/45">WhatsApp</p>
+            <h2 className="mt-2 text-3xl font-semibold text-ink">QR Code da conexao</h2>
+            <p className="mt-2 text-sm text-ink/60">
+              Escaneie este QR no WhatsApp para conectar a sessao da barbearia sem sair do painel.
+            </p>
+            {sessionName ? (
+              <p className="mt-3 text-xs uppercase tracking-[0.25em] text-ink/45">
+                Sessao: {sessionName}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <a
+              className="rounded-full border border-ink/10 px-4 py-2 text-sm text-ink/70 transition hover:bg-ink hover:text-cream"
+              href={qrPageUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              Abrir em nova aba
+            </a>
+            <button
+              className="rounded-full border border-ink/10 px-4 py-2 text-sm text-ink/70 transition hover:bg-ink hover:text-cream"
+              onClick={onClose}
+              type="button"
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-6 overflow-hidden rounded-[28px] border border-ink/8 bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
+          <iframe
+            className="h-[540px] w-full bg-[#f6f3ee]"
+            src={iframeSrc}
+            title="QR Code do WhatsApp"
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function AppointmentModal({
@@ -201,6 +277,7 @@ export default function Agenda() {
   const [success, setSuccess] = useState("");
   const [modalType, setModalType] = useState(null);
   const [modalAppointment, setModalAppointment] = useState(null);
+  const [showQrModal, setShowQrModal] = useState(false);
   const [form, setForm] = useState(getInitialForm(getToday()));
 
   const defaultServiceName = useMemo(
@@ -319,8 +396,8 @@ export default function Agenda() {
   }
 
   const qrPageUrl = whatsappConnection?.qrPageUrl
-    ? buildApiUrl(whatsappConnection.qrPageUrl)
-    : buildApiUrl("/qr");
+    ? buildChatbotUrl(whatsappConnection.qrPageUrl)
+    : buildChatbotUrl("/qr");
 
   async function handleCancel(agendamento) {
     const confirmed = window.confirm(
@@ -382,6 +459,12 @@ export default function Agenda() {
         servicos={servicos.length ? servicos : [{ id: "default", nome: defaultServiceName }]}
         type={modalType}
       />
+      <WhatsAppQrModal
+        isOpen={showQrModal}
+        onClose={() => setShowQrModal(false)}
+        qrPageUrl={qrPageUrl}
+        sessionName={whatsappConnection?.session_name}
+      />
 
       <div className="glass rounded-3xl p-8 shadow-soft">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -399,7 +482,7 @@ export default function Agenda() {
           <div className="flex flex-wrap items-center gap-3">
             <button
               className="bg-white/80 border border-ink/10 rounded-2xl px-5 py-3 text-sm"
-              onClick={() => window.open(qrPageUrl, "_blank", "noopener,noreferrer")}
+              onClick={() => setShowQrModal(true)}
               type="button"
             >
               Abrir QR do WhatsApp
