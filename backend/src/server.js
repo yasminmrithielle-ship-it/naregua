@@ -198,7 +198,27 @@ function registerDisabledChatbotRoutes(application) {
 }
 
 function registerFrontendRoutes(application) {
-  application.use(express.static(frontendDistPath));
+  application.use(
+    express.static(frontendDistPath, {
+      setHeaders(res, filePath) {
+        const fileName = path.basename(filePath);
+
+        if (fileName === "sw.js") {
+          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+          return;
+        }
+
+        if (fileName === "index.html") {
+          res.setHeader("Cache-Control", "no-store");
+          return;
+        }
+
+        if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      }
+    })
+  );
 
   application.get("*", (req, res, next) => {
     if (
@@ -221,6 +241,7 @@ function registerFrontendRoutes(application) {
       return next();
     }
 
+    res.setHeader("Cache-Control", "no-store");
     return res.sendFile(path.join(frontendDistPath, "index.html"));
   });
 }

@@ -1,8 +1,7 @@
-const STATIC_CACHE = "barber-go-static-v2";
-const RUNTIME_CACHE = "barber-go-runtime-v2";
+const STATIC_CACHE = "barber-go-static-v3";
+const RUNTIME_CACHE = "barber-go-runtime-v3";
 const APP_SHELL_URL = "/";
 const APP_SHELL_ASSETS = [
-  "/",
   "/manifest.webmanifest",
   "/offline.html",
   "/icons/icon-192.svg",
@@ -89,10 +88,12 @@ self.addEventListener("fetch", (event) => {
 
   if (isAppShellNavigation(event.request, url)) {
     event.respondWith(
-      fetch(event.request)
+      fetch(new Request(event.request, { cache: "no-store" }))
         .then((response) => {
-          const cloned = response.clone();
-          caches.open(STATIC_CACHE).then((cache) => cache.put(APP_SHELL_URL, cloned));
+          if (response.ok) {
+            const cloned = response.clone();
+            caches.open(STATIC_CACHE).then((cache) => cache.put(APP_SHELL_URL, cloned));
+          }
           return response;
         })
         .catch(async () => {
