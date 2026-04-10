@@ -1,5 +1,5 @@
-const STATIC_CACHE = "barber-go-static-v1";
-const RUNTIME_CACHE = "barber-go-runtime-v1";
+const STATIC_CACHE = "barber-go-static-v2";
+const RUNTIME_CACHE = "barber-go-runtime-v2";
 const APP_SHELL_URL = "/";
 const APP_SHELL_ASSETS = [
   "/",
@@ -72,6 +72,12 @@ self.addEventListener("activate", (event) => {
       )
       .then(() => self.clients.claim())
   );
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener("fetch", (event) => {
