@@ -1,5 +1,10 @@
 # Sistema de Agendamentos para Barbearia
 
+Documentacao SaaS atualizada:
+
+- `README_SAAS.md`
+- `ANDROID_SETUP.md`
+
 Este projeto possui 3 camadas principais:
 
 1. API / Backend (`backend`)

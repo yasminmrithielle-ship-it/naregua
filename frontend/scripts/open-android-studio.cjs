@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 
 const projectRoot = path.resolve(__dirname, "..");
 const androidProjectPath = path.join(projectRoot, "android");
@@ -21,6 +21,65 @@ function getStaticCandidates() {
     path.join(localAppData, "Programs", "Android Studio", "bin", "studio64.exe"),
     path.join(localAppData, "Programs", "Android Studio", "bin", "studio.exe")
   ].filter(Boolean);
+}
+
+function normalizeCandidate(candidate) {
+  if (!candidate || typeof candidate !== "string") {
+    return [];
+  }
+
+  const cleaned = candidate.trim().replace(/^"|"$/g, "");
+
+  if (!cleaned) {
+    return [];
+  }
+
+  const normalized = cleaned.replace(/\//g, "\\");
+  const results = [normalized];
+
+  if (fs.existsSync(normalized) && fs.statSync(normalized).isDirectory()) {
+    results.push(path.join(normalized, "bin", "studio64.exe"));
+    results.push(path.join(normalized, "bin", "studio.exe"));
+  } else if (normalized.toLowerCase().endsWith("\\studio.exe")) {
+    results.push(normalized.slice(0, -10) + "studio64.exe");
+  }
+
+  return results;
+}
+
+function getRegistryCandidates() {
+  if (process.platform !== "win32") {
+    return [];
+  }
+
+  const script = `
+    $keys = @(
+      'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+      'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+      'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+    )
+    Get-ItemProperty $keys -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -like '*Android Studio*' } |
+      ForEach-Object {
+        if ($_.DisplayIcon) { $_.DisplayIcon }
+        if ($_.InstallLocation) { $_.InstallLocation }
+      }
+  `;
+
+  try {
+    const output = execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-Command", script],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+    );
+
+    return output
+      .split(/\r?\n/)
+      .flatMap((line) => normalizeCandidate(line))
+      .filter(Boolean);
+  } catch (error) {
+    return [];
+  }
 }
 
 function findInToolbox() {
@@ -58,7 +117,11 @@ function findInToolbox() {
 }
 
 function resolveAndroidStudioPath() {
-  const candidates = [...getEnvCandidate(), ...getStaticCandidates()];
+  const candidates = [
+    ...getEnvCandidate(),
+    ...getStaticCandidates(),
+    ...getRegistryCandidates()
+  ];
 
   for (const candidate of candidates) {
     if (candidate && fs.existsSync(candidate)) {

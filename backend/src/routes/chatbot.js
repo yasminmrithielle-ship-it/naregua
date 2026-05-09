@@ -1,8 +1,9 @@
 import express from "express";
 import { z } from "zod";
 import { pool, query } from "../db.js";
-import { requireAuth } from "../middleware/auth.js";
+import { attachAuth, requireAdmin, requireAuth } from "../middleware/auth.js";
 import { requireChatbotInternal } from "../middleware/chatbotInternal.js";
+import { requireFeatureAccess } from "../middleware/subscriptionAccess.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { buildPublicChatbotUrl } from "../config.js";
 import { ensureDefaultServices } from "../services/serviceCatalog.js";
@@ -11,17 +12,27 @@ import {
   scheduleAppointmentReminders
 } from "../services/reminderScheduler.js";
 import {
+  disconnectTenantChatbotSession,
+  getTenantChatbotStatus,
+  getTenantQrCode,
+  listChatbotPublicConnections,
+  restartTenantChatbotSession,
+  startTenantChatbotSession
+} from "../services/chatbotGateway.js";
+import {
+  getChatbotContextByBarbershopId,
   getChatbotContextBySessionName,
   getPrimaryWhatsAppConnection,
-  listActiveWhatsAppConnections,
   updateWhatsAppConnectionSync
 } from "../services/barbershopService.js";
+import { assertFeatureAccess } from "../services/saasService.js";
 import { deactivateExpiredOpenSlots, getCurrentSlotReference } from "../services/slotExpiry.js";
 
 const router = express.Router();
 
 const internalAppointmentSchema = z.object({
-  sessionName: z.string().trim().min(1, "sessionName obrigatorio"),
+  barbeariaId: z.string().trim().optional(),
+  sessionName: z.string().trim().optional(),
   nome: z.string().trim().min(2, "Nome obrigatorio"),
   telefone: z.string().trim().min(8, "Telefone obrigatorio"),
   data: z.string().trim().min(10, "Data obrigatoria"),
@@ -31,9 +42,11 @@ const internalAppointmentSchema = z.object({
 });
 
 const syncSchema = z.object({
-  sessionName: z.string().trim().min(1, "sessionName obrigatorio"),
+  barbeariaId: z.string().trim().optional(),
+  sessionName: z.string().trim().optional(),
   status: z.string().trim().optional(),
   qrCode: z.string().trim().nullable().optional(),
+  qrDataUrl: z.string().trim().nullable().optional(),
   phoneNumber: z.string().trim().nullable().optional(),
   lastConnectedAt: z.string().trim().nullable().optional()
 });
@@ -45,18 +58,52 @@ function asExecutor(client) {
 }
 
 function withPublicChatbotUrls(connection) {
+  if (!connection) {
+    return null;
+  }
+
   return {
     ...connection,
     qrPageUrl: buildPublicChatbotUrl(`/chatbot/connections/${connection.session_name}/qr`),
     qrImageUrl: buildPublicChatbotUrl(`/chatbot/connections/${connection.session_name}/qr.png`),
-    statusUrl: buildPublicChatbotUrl(`/chatbot/connections/${connection.session_name}/status`)
+    statusUrl: buildPublicChatbotUrl(
+      `/chatbot/connections/${connection.session_name}/status`
+    )
   };
+}
+
+function resolveAuthBarbershopId(req) {
+  return req.auth?.membership?.barbershopId || null;
+}
+
+async function resolveContextOr404({ barbeariaId = null, sessionName = null }, res) {
+  const context = barbeariaId
+    ? await getChatbotContextByBarbershopId(barbeariaId)
+    : await getChatbotContextBySessionName(sessionName);
+
+  if (!context) {
+    res.status(404).json({ error: "Conexao WhatsApp nao encontrada." });
+    return null;
+  }
+
+  try {
+    await assertFeatureAccess(context.barbearia_id, "chatbot");
+  } catch (error) {
+    res.status(403).json({
+      error:
+        error.message ||
+        "A assinatura desta barbearia nao permite usar o chatbot."
+    });
+    return null;
+  }
+
+  return context;
 }
 
 async function ensureServiceExists(client, servico, barbeariaId) {
   const serviceResult = await client.query(
     `
-      SELECT id
+      SELECT id, nome
       FROM servicos
       WHERE barbearia_id = $1
         AND nome = $2
@@ -66,13 +113,17 @@ async function ensureServiceExists(client, servico, barbeariaId) {
     [barbeariaId, servico]
   );
 
-  return serviceResult.rows.length > 0;
+  return serviceResult.rows[0] || null;
 }
 
 async function upsertCustomer(client, { barbeariaId, nome, telefone }) {
   const result = await client.query(
     `
-      INSERT INTO clientes (barbearia_id, nome, telefone)
+      INSERT INTO clientes (
+        barbearia_id,
+        nome,
+        telefone
+      )
       VALUES ($1, $2, $3)
       ON CONFLICT (barbearia_id, telefone) DO UPDATE
       SET
@@ -86,19 +137,8 @@ async function upsertCustomer(client, { barbeariaId, nome, telefone }) {
   return result.rows[0];
 }
 
-async function resolveContextOr404(sessionName, res) {
-  const context = await getChatbotContextBySessionName(sessionName);
-
-  if (!context) {
-    res.status(404).json({ error: "Conexao WhatsApp nao encontrada." });
-    return null;
-  }
-
-  return context;
-}
-
 router.get("/barbershop/context", requireAuth, asyncHandler(async (req, res) => {
-  const [settingsResult, connection] = await Promise.all([
+  const [settingsResult, connection, status] = await Promise.all([
     query(
       `
         SELECT *
@@ -108,15 +148,22 @@ router.get("/barbershop/context", requireAuth, asyncHandler(async (req, res) => 
       `,
       [req.auth.membership.barbershopId]
     ),
-    getPrimaryWhatsAppConnection(req.auth.membership.barbershopId)
+    getPrimaryWhatsAppConnection(req.auth.membership.barbershopId),
+    getTenantChatbotStatus(req.auth.membership.barbershopId).catch(() => null)
   ]);
 
   return res.json({
     user: req.auth.user,
     membership: req.auth.membership,
     barbershop: req.auth.barbershop,
+    saasSubscription: req.auth.saasSubscription || null,
     chatbotSettings: settingsResult.rows[0] || null,
-    whatsappConnection: connection ? withPublicChatbotUrls(connection) : null
+    whatsappConnection: connection
+      ? {
+          ...withPublicChatbotUrls(connection),
+          runtimeStatus: status
+        }
+      : null
   });
 }));
 
@@ -127,22 +174,104 @@ router.get("/chatbot/connection", requireAuth, asyncHandler(async (req, res) => 
     return res.status(404).json({ error: "Nenhuma conexao WhatsApp cadastrada para esta conta." });
   }
 
-  return res.json(withPublicChatbotUrls(connection));
+  const status = await getTenantChatbotStatus(req.auth.membership.barbershopId).catch(
+    () => null
+  );
+
+  return res.json({
+    ...withPublicChatbotUrls(connection),
+    runtimeStatus: status
+  });
 }));
 
+router.get("/chatbot/status", attachAuth, asyncHandler(async (req, res) => {
+  const authenticatedBarbershopId = resolveAuthBarbershopId(req);
+
+  if (!authenticatedBarbershopId) {
+    const connections = await listChatbotPublicConnections();
+    return res.json({ connections });
+  }
+
+  const [connection, status] = await Promise.all([
+    getPrimaryWhatsAppConnection(authenticatedBarbershopId),
+    getTenantChatbotStatus(authenticatedBarbershopId)
+  ]);
+
+  return res.json({
+    barbeariaId: authenticatedBarbershopId,
+    connection: connection ? withPublicChatbotUrls(connection) : null,
+    status
+  });
+}));
+
+router.get(
+  "/chatbot/qr",
+  requireAuth,
+  requireAdmin,
+  requireFeatureAccess("chatbot"),
+  asyncHandler(async (req, res) => {
+    const payload = await getTenantQrCode(req.auth.membership.barbershopId);
+    return res.json(payload);
+  })
+);
+
+router.post(
+  "/chatbot/connect",
+  requireAuth,
+  requireAdmin,
+  requireFeatureAccess("chatbot"),
+  asyncHandler(async (req, res) => {
+    const payload = await startTenantChatbotSession(req.auth.membership.barbershopId);
+    return res.json(payload);
+  })
+);
+
+router.post(
+  "/chatbot/restart",
+  requireAuth,
+  requireAdmin,
+  requireFeatureAccess("chatbot"),
+  asyncHandler(async (req, res) => {
+    const payload = await restartTenantChatbotSession(req.auth.membership.barbershopId);
+    return res.json(payload);
+  })
+);
+
+router.post(
+  "/chatbot/disconnect",
+  requireAuth,
+  requireAdmin,
+  requireFeatureAccess("chatbot"),
+  asyncHandler(async (req, res) => {
+    const payload = await disconnectTenantChatbotSession(req.auth.membership.barbershopId);
+    return res.json(payload);
+  })
+);
+
 router.get("/internal/chatbot/connections", requireChatbotInternal, asyncHandler(async (_req, res) => {
-  const connections = await listActiveWhatsAppConnections();
-  return res.json(connections);
+  const connections = await query(
+    `
+      SELECT *
+      FROM conexoes_whatsapp
+      WHERE ativo = true
+      ORDER BY created_at ASC
+    `
+  );
+
+  return res.json(connections.rows);
 }));
 
 router.get("/internal/chatbot/context", requireChatbotInternal, asyncHandler(async (req, res) => {
+  const barbeariaId = String(req.query.barbeariaId || "").trim();
   const sessionName = String(req.query.sessionName || "").trim();
 
-  if (!sessionName) {
-    return res.status(400).json({ error: "Parametro sessionName e obrigatorio." });
+  if (!barbeariaId && !sessionName) {
+    return res.status(400).json({
+      error: "Parametro barbeariaId ou sessionName e obrigatorio."
+    });
   }
 
-  const context = await resolveContextOr404(sessionName, res);
+  const context = await resolveContextOr404({ barbeariaId, sessionName }, res);
   if (!context) {
     return;
   }
@@ -166,13 +295,13 @@ router.get("/internal/chatbot/context", requireChatbotInternal, asyncHandler(asy
       name: context.barbearia_nome,
       slug: context.barbearia_slug,
       logoUrl: context.logo_url,
-      phone: context.phone,
+      phone: context.telefone,
       whatsappNumber: context.whatsapp_number,
       address: context.address,
-      subscriptionPlan: context.subscription_plan,
+      subscriptionPlan: context.plano,
       status: context.barbearia_status,
       timezone: context.timezone,
-      primaryColor: context.primary_color,
+      primaryColor: context.cor_primaria,
       accentColor: context.accent_color
     },
     settings: {
@@ -189,10 +318,13 @@ router.get("/internal/chatbot/context", requireChatbotInternal, asyncHandler(asy
     connection: {
       id: context.connection_id,
       sessionName: context.session_name,
+      sessionPath: context.session_path,
       phoneNumber: context.phone_number,
+      connectedPhone: context.telefone_conectado,
       provider: context.provider,
       status: context.connection_status,
       qrCode: context.qr_code,
+      qrDataUrl: context.qr_data_url,
       lastConnectedAt: context.last_connected_at
     },
     services: servicesResult.rows
@@ -200,14 +332,17 @@ router.get("/internal/chatbot/context", requireChatbotInternal, asyncHandler(asy
 }));
 
 router.get("/internal/chatbot/days", requireChatbotInternal, asyncHandler(async (req, res) => {
+  const barbeariaId = String(req.query.barbeariaId || "").trim();
   const sessionName = String(req.query.sessionName || "").trim();
   const dataInicial = req.query.dataInicial;
 
-  if (!sessionName) {
-    return res.status(400).json({ error: "Parametro sessionName e obrigatorio." });
+  if (!barbeariaId && !sessionName) {
+    return res.status(400).json({
+      error: "Parametro barbeariaId ou sessionName e obrigatorio."
+    });
   }
 
-  const context = await resolveContextOr404(sessionName, res);
+  const context = await resolveContextOr404({ barbeariaId, sessionName }, res);
   if (!context) {
     return;
   }
@@ -272,14 +407,17 @@ router.get("/internal/chatbot/days", requireChatbotInternal, asyncHandler(async 
 }));
 
 router.get("/internal/chatbot/hours", requireChatbotInternal, asyncHandler(async (req, res) => {
+  const barbeariaId = String(req.query.barbeariaId || "").trim();
   const sessionName = String(req.query.sessionName || "").trim();
   const data = String(req.query.data || "").trim();
 
-  if (!sessionName || !data) {
-    return res.status(400).json({ error: "Parametros sessionName e data sao obrigatorios." });
+  if ((!barbeariaId && !sessionName) || !data) {
+    return res.status(400).json({
+      error: "Parametros barbeariaId/sessionName e data sao obrigatorios."
+    });
   }
 
-  const context = await resolveContextOr404(sessionName, res);
+  const context = await resolveContextOr404({ barbeariaId, sessionName }, res);
   if (!context) {
     return;
   }
@@ -313,14 +451,17 @@ router.get("/internal/chatbot/hours", requireChatbotInternal, asyncHandler(async
 }));
 
 router.get("/internal/chatbot/appointments", requireChatbotInternal, asyncHandler(async (req, res) => {
+  const barbeariaId = String(req.query.barbeariaId || "").trim();
   const sessionName = String(req.query.sessionName || "").trim();
   const phone = String(req.query.phone || "").replace(/\D/g, "");
 
-  if (!sessionName || !phone) {
-    return res.status(400).json({ error: "Parametros sessionName e phone sao obrigatorios." });
+  if ((!barbeariaId && !sessionName) || !phone) {
+    return res.status(400).json({
+      error: "Parametros barbeariaId/sessionName e phone sao obrigatorios."
+    });
   }
 
-  const context = await resolveContextOr404(sessionName, res);
+  const context = await resolveContextOr404({ barbeariaId, sessionName }, res);
   if (!context) {
     return;
   }
@@ -330,7 +471,7 @@ router.get("/internal/chatbot/appointments", requireChatbotInternal, asyncHandle
       SELECT *
       FROM agendamentos
       WHERE barbearia_id = $1
-        AND REGEXP_REPLACE(telefone, '\D', '', 'g') = $2
+        AND REGEXP_REPLACE(COALESCE(cliente_telefone, telefone), '\D', '', 'g') = $2
         AND status != 'cancelado'
       ORDER BY data ASC, hora ASC
     `,
@@ -350,11 +491,18 @@ router.post("/internal/chatbot/appointments", requireChatbotInternal, asyncHandl
     });
   }
 
-  const context = await resolveContextOr404(parsed.data.sessionName, res);
+  const context = await resolveContextOr404(
+    {
+      barbeariaId: parsed.data.barbeariaId || null,
+      sessionName: parsed.data.sessionName || null
+    },
+    res
+  );
   if (!context) {
     return;
   }
 
+  await assertFeatureAccess(context.barbearia_id, "appointments");
   const client = await pool.connect();
 
   try {
@@ -371,13 +519,9 @@ router.post("/internal/chatbot/appointments", requireChatbotInternal, asyncHandl
     }
 
     await ensureDefaultServices(context.barbearia_id, client);
-    const serviceExists = await ensureServiceExists(
-      client,
-      parsed.data.servico,
-      context.barbearia_id
-    );
+    const service = await ensureServiceExists(client, parsed.data.servico, context.barbearia_id);
 
-    if (!serviceExists) {
+    if (!service) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "Servico nao cadastrado no catalogo" });
     }
@@ -417,16 +561,35 @@ router.post("/internal/chatbot/appointments", requireChatbotInternal, asyncHandl
         INSERT INTO agendamentos (
           barbearia_id,
           cliente_id,
+          cliente_nome,
+          cliente_telefone,
           nome,
           telefone,
           data,
           hora,
+          servico_id,
+          servico_nome,
           servico,
           status,
           origem,
           observacoes
         )
-        VALUES ($1, $2, $3, $4, $5::date, $6, $7, 'confirmado', 'whatsapp', $8)
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $3,
+          $4,
+          $5::date,
+          $6,
+          $7,
+          $8,
+          $8,
+          'confirmado',
+          'chatbot',
+          $9
+        )
         RETURNING *
       `,
       [
@@ -436,7 +599,8 @@ router.post("/internal/chatbot/appointments", requireChatbotInternal, asyncHandl
         parsed.data.telefone,
         parsed.data.data,
         parsed.data.hora,
-        parsed.data.servico,
+        service.id,
+        service.nome,
         parsed.data.observacoes || null
       ]
     );
@@ -464,14 +628,17 @@ router.post("/internal/chatbot/appointments", requireChatbotInternal, asyncHandl
 }));
 
 router.delete("/internal/chatbot/appointments/:id", requireChatbotInternal, asyncHandler(async (req, res) => {
+  const barbeariaId = String(req.query.barbeariaId || "").trim();
   const sessionName = String(req.query.sessionName || "").trim();
   const appointmentId = Number(req.params.id);
 
-  if (!sessionName || !Number.isInteger(appointmentId)) {
-    return res.status(400).json({ error: "sessionName e id validos sao obrigatorios." });
+  if ((!barbeariaId && !sessionName) || !Number.isInteger(appointmentId)) {
+    return res.status(400).json({
+      error: "barbeariaId/sessionName e id validos sao obrigatorios."
+    });
   }
 
-  const context = await resolveContextOr404(sessionName, res);
+  const context = await resolveContextOr404({ barbeariaId, sessionName }, res);
   if (!context) {
     return;
   }

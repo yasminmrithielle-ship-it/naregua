@@ -1,4 +1,5 @@
 import { getSessionFromToken } from "../services/authService.js";
+import { matchesRole } from "../services/roleService.js";
 
 function extractToken(req) {
   const header = req.headers.authorization || "";
@@ -29,33 +30,45 @@ export async function requireAuth(req, res, next) {
     return res.status(401).json({ error: "Sessao nao autenticada." });
   }
 
-  const session = await getSessionFromToken(token);
+  try {
+    const session = await getSessionFromToken(token);
 
-  if (!session) {
+    if (!session) {
+      return res.status(401).json({ error: "Sessao invalida ou expirada." });
+    }
+
+    req.auth = session;
+    return next();
+  } catch (error) {
     return res.status(401).json({ error: "Sessao invalida ou expirada." });
   }
+}
 
-  req.auth = session;
+export async function requireTenant(req, res, next) {
+  if (!req.auth) {
+    return requireAuth(req, res, () => requireTenant(req, res, next));
+  }
+
+  const barbeariaId = req.auth?.membership?.barbershopId;
+
+  if (!barbeariaId) {
+    return res.status(403).json({ error: "Tenant da barbearia nao encontrado na sessao." });
+  }
+
+  req.tenant = {
+    barbershopId: barbeariaId
+  };
+
   return next();
 }
 
-export function requireRoles(allowedRoles = []) {
+export function requireRole(allowedRoles = []) {
   return async function roleMiddleware(req, res, next) {
     if (!req.auth) {
-      const token = extractToken(req);
-      if (!token) {
-        return res.status(401).json({ error: "Sessao nao autenticada." });
-      }
-
-      const session = await getSessionFromToken(token);
-      if (!session) {
-        return res.status(401).json({ error: "Sessao invalida ou expirada." });
-      }
-
-      req.auth = session;
+      return requireAuth(req, res, () => roleMiddleware(req, res, next));
     }
 
-    if (!allowedRoles.includes(req.auth.membership.role)) {
+    if (!matchesRole(req.auth.membership.role, allowedRoles)) {
       return res.status(403).json({ error: "Voce nao possui permissao para esta acao." });
     }
 
@@ -63,10 +76,11 @@ export function requireRoles(allowedRoles = []) {
   };
 }
 
-export const requireAdmin = requireRoles(["owner", "admin", "attendant"]);
-export const requireOperationalUser = requireRoles([
+export const requireRoles = requireRole;
+export const requireAdmin = requireRole(["owner", "admin", "recepcao"]);
+export const requireOperationalUser = requireRole([
   "owner",
   "admin",
-  "attendant",
-  "barber"
+  "recepcao",
+  "barbeiro"
 ]);

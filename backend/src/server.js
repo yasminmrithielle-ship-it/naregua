@@ -8,6 +8,10 @@ import agendamentosRoutes from "./routes/agendamentos.js";
 import adminRoutes from "./routes/admin.js";
 import chatbotRoutes from "./routes/chatbot.js";
 import relatoriosRoutes from "./routes/relatorios.js";
+import dashboardRoutes from "./routes/dashboard.js";
+import clientesRoutes from "./routes/clientes.js";
+import barbeirosRoutes from "./routes/barbeiros.js";
+import configuracoesRoutes from "./routes/configuracoes.js";
 import { startReminders } from "./services/reminders.js";
 import { startSlotExpiryMonitor } from "./services/slotExpiry.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -20,11 +24,14 @@ import {
 } from "./db.js";
 import {
   getChatbotEnabled,
+  getCorsOrigins,
   getRuntimeSummary,
   validateRuntimeConfig
 } from "./config.js";
 import { ensureSeedData } from "./services/authService.js";
+import { ensureSaasSubscriptionsForActiveBarbershops } from "./services/saasService.js";
 import { ensureChatbotScaffoldForActiveBarbershops } from "./services/barbershopService.js";
+import { registerLocalChatbotController } from "./services/chatbotGateway.js";
 
 dotenv.config();
 
@@ -41,9 +48,13 @@ const DATABASE_REQUIRED_PATH_PREFIXES = [
   "/agendar",
   "/agendamento",
   "/agendamentos",
+  "/dashboard",
+  "/clientes",
+  "/barbeiros",
   "/relatorios",
   "/servicos",
   "/assinaturas",
+  "/configuracoes",
   "/webhook"
 ];
 const startupState = {
@@ -52,7 +63,19 @@ const startupState = {
   warnings: []
 };
 
-app.use(cors());
+const corsOrigins = getCorsOrigins();
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || !corsOrigins.length || corsOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("CORS origin nao permitida."));
+    }
+  })
+);
 app.use(express.json());
 
 app.get("/health", async (req, res) => {
@@ -99,6 +122,10 @@ app.use((req, res, next) => {
 
 app.use(adminRoutes);
 app.use(chatbotRoutes);
+app.use(dashboardRoutes);
+app.use(clientesRoutes);
+app.use(barbeirosRoutes);
+app.use(configuracoesRoutes);
 app.use(horariosRoutes);
 app.use(agendamentosRoutes);
 app.use(relatoriosRoutes);
@@ -229,9 +256,13 @@ function registerFrontendRoutes(application) {
       req.path.startsWith("/agendar") ||
       req.path.startsWith("/agendamento") ||
       req.path.startsWith("/agendamentos") ||
+      req.path.startsWith("/dashboard") ||
+      req.path.startsWith("/clientes") ||
+      req.path.startsWith("/barbeiros") ||
       req.path.startsWith("/relatorios") ||
       req.path.startsWith("/servicos") ||
       req.path.startsWith("/assinaturas") ||
+      req.path.startsWith("/configuracoes") ||
       req.path.startsWith("/chatbot") ||
       req.path.startsWith("/webhook") ||
       req.path === "/health" ||
@@ -272,6 +303,7 @@ async function bootstrap() {
     try {
       await initializeDatabase();
       await ensureSeedData();
+      await ensureSaasSubscriptionsForActiveBarbershops();
       await ensureChatbotScaffoldForActiveBarbershops();
       startReminders();
       startSlotExpiryMonitor();
@@ -290,6 +322,7 @@ async function bootstrap() {
     try {
       const chatbotModule = await import("../../chatbot/robo.js");
       const { initializeChatbot, registerChatbotRoutes } = chatbotModule.default;
+      registerLocalChatbotController(chatbotModule.default);
       registerChatbotRoutes(app);
       startIntegratedChatbot = initializeChatbot;
     } catch (error) {

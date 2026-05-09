@@ -41,11 +41,12 @@ export function BarbershopProvider({ children }) {
     () => ({
       loading,
       barbershop: contextValue?.barbershop || session?.barbershop || null,
+      saasSubscription: contextValue?.saasSubscription || session?.saasSubscription || null,
       chatbotSettings: contextValue?.chatbotSettings || null,
       whatsappConnection: contextValue?.whatsappConnection || null,
       refreshBarbershopContext
     }),
-    [contextValue, loading, session?.barbershop]
+    [contextValue, loading, session?.barbershop, session?.saasSubscription]
   );
 
   return (

@@ -3,21 +3,37 @@ import { useAuth } from "../hooks/useAuth.js";
 import { useBarbershop } from "../hooks/useBarbershop.js";
 
 const links = [
-  { to: "/dashboard", label: "Dashboard" },
-  { to: "/agenda", label: "Agenda" },
-  { to: "/horarios", label: "Horarios" },
-  { to: "/servicos", label: "Servicos" },
-  { to: "/assinaturas", label: "Assinaturas" }
+  { to: "/app/dashboard", label: "Dashboard", shortLabel: "Dash" },
+  { to: "/app/onboarding", label: "Onboarding", shortLabel: "Start" },
+  { to: "/app/agenda", label: "Agenda", shortLabel: "Agenda" },
+  { to: "/app/clientes", label: "Clientes", shortLabel: "Clientes" },
+  { to: "/app/servicos", label: "Servicos", shortLabel: "Servicos" },
+  { to: "/app/barbeiros", label: "Barbeiros", shortLabel: "Barbeiros" },
+  { to: "/app/horarios", label: "Horarios", shortLabel: "Horarios" },
+  { to: "/app/chatbot", label: "WhatsApp", shortLabel: "WhatsApp" },
+  { to: "/app/plano", label: "Plano", shortLabel: "Plano" },
+  { to: "/app/assinaturas", label: "Mensalistas", shortLabel: "Clube" },
+  { to: "/app/configuracoes", label: "Configuracoes", shortLabel: "Config" }
 ];
+
+function activeClass(isActive) {
+  return isActive
+    ? "bg-[rgba(212,166,74,0.16)] text-[var(--accent-strong)] border-[rgba(212,166,74,0.24)]"
+    : "text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-soft)]";
+}
+
+export function navigationLinks() {
+  return links;
+}
 
 export default function Sidebar({ mobile = false, onNavigate }) {
   const navigate = useNavigate();
   const { user, membership, memberships, logout, switchBarbershop } = useAuth();
-  const { barbershop } = useBarbershop();
+  const { barbershop, saasSubscription } = useBarbershop();
 
   async function handleLogout() {
     await logout();
-    navigate("/");
+    navigate("/login");
   }
 
   async function handleMembershipChange(event) {
@@ -28,85 +44,89 @@ export default function Sidebar({ mobile = false, onNavigate }) {
 
     await switchBarbershop(nextBarbershopId);
     onNavigate?.();
-    navigate("/dashboard");
+    navigate("/app/dashboard");
   }
 
   return (
     <aside
-      className={`glass shadow-soft rounded-3xl p-6 flex flex-col gap-8 h-full ${
-        mobile ? "min-h-full" : ""
-      }`}
+      className={`panel-card h-full p-5 sm:p-6 ${mobile ? "min-h-full" : ""}`}
     >
-      <div className="flex items-start gap-4">
-        {barbershop?.logoUrl ? (
-          <img
-            alt={barbershop.name}
-            className="h-14 w-14 rounded-2xl object-cover border border-ink/10 bg-white/70"
-            src={barbershop.logoUrl}
-          />
-        ) : (
-          <div className="h-14 w-14 rounded-2xl bg-ink text-cream grid place-items-center font-display text-xl">
-            {(barbershop?.name || "BG").slice(0, 2).toUpperCase()}
+      <div className="flex h-full flex-col gap-6">
+        <div className="panel-card-soft p-4">
+          <div className="flex items-center gap-3">
+            {barbershop?.logoUrl ? (
+              <img
+                alt={barbershop.name}
+                className="h-14 w-14 rounded-2xl object-cover"
+                src={barbershop.logoUrl}
+              />
+            ) : (
+              <div className="grid h-14 w-14 place-items-center rounded-2xl bg-[var(--text)] font-display text-lg text-white">
+                {(barbershop?.name || "AG").slice(0, 2).toUpperCase()}
+              </div>
+            )}
+            <div className="min-w-0">
+              <p className="truncate text-[11px] uppercase tracking-[0.28em] muted-copy">
+                Agenda Barber
+              </p>
+              <h1 className="truncate font-display text-2xl">{barbershop?.name || "Barbearia"}</h1>
+            </div>
           </div>
-        )}
-        <div className="min-w-0">
-          <p className="text-sm uppercase tracking-[0.22em] text-ink/60 truncate">
-            {barbershop?.name || "Barbearia"}
-          </p>
-          <h1 className="font-display text-2xl mt-2 leading-tight">
-            Painel Administrativo
-          </h1>
-          <p className="text-xs text-ink/50 mt-2 truncate">
-            {user?.email || "Conta"} | {membership?.role || "owner"}
-          </p>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <span className="tag-pill">
+              {saasSubscription?.plano_nome || barbershop?.subscriptionPlan || "Plano"}
+            </span>
+            <span className="tag-pill">
+              {membership?.role || "owner"}
+            </span>
+          </div>
+
+          <p className="mt-4 text-sm muted-copy">{user?.email || "Conta da barbearia"}</p>
         </div>
-      </div>
 
-      {memberships.length > 1 ? (
-        <label className="text-xs uppercase tracking-[0.18em] text-ink/55">
-          Conta ativa
-          <select
-            className="mt-3 w-full rounded-2xl border border-ink/10 bg-white/70 px-4 py-3 text-sm text-ink"
-            onChange={handleMembershipChange}
-            value={membership?.barbershopId || ""}
-          >
-            {memberships.map((item) => (
-              <option key={item.barbershop.id} value={item.barbershop.id}>
-                {item.barbershop.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
+        {memberships.length > 1 ? (
+          <label className="text-xs uppercase tracking-[0.22em] muted-copy">
+            Conta ativa
+            <select
+              className="field-shell mt-3 w-full"
+              onChange={handleMembershipChange}
+              value={membership?.barbershopId || ""}
+            >
+              {memberships.map((item) => (
+                <option key={item.barbershop.id} value={item.barbershop.id}>
+                  {item.barbershop.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
 
-      <nav className="flex flex-col gap-3">
-        {links.map((link) => (
-          <NavLink
-            key={link.to}
-            onClick={() => onNavigate?.()}
-            to={link.to}
-            className={({ isActive }) =>
-              `px-4 py-3 rounded-2xl text-sm font-medium transition ${
-                isActive ? "bg-ink text-cream" : "bg-white/50 hover:bg-white"
-              }`
-            }
-          >
-            {link.label}
-          </NavLink>
-        ))}
-      </nav>
+        <nav className="grid gap-2">
+          {links.map((link) => (
+            <NavLink
+              key={link.to}
+              className={({ isActive }) =>
+                `rounded-2xl border px-4 py-3 text-sm font-medium transition ${activeClass(
+                  isActive
+                )}`
+              }
+              onClick={() => onNavigate?.()}
+              to={link.to}
+            >
+              {link.label}
+            </NavLink>
+          ))}
+        </nav>
 
-      <div className="mt-auto flex flex-col gap-4">
-        <div className="rounded-2xl bg-white/60 border border-ink/5 px-4 py-4 text-xs text-ink/60">
-          SaaS multiempresa ativo com tenant isolado por sessao e por conexao WhatsApp.
+        <div className="mt-auto grid gap-3">
+          <div className="panel-card-soft p-4 text-sm muted-copy">
+            Tenant isolado por token, dados por barbearia e WhatsApp individual por sessao.
+          </div>
+          <button className="secondary-button" onClick={handleLogout} type="button">
+            Sair
+          </button>
         </div>
-        <button
-          className="rounded-2xl border border-ink/10 bg-white/70 px-4 py-3 text-sm text-ink/75 transition hover:bg-ink hover:text-cream"
-          onClick={handleLogout}
-          type="button"
-        >
-          Sair
-        </button>
       </div>
     </aside>
   );

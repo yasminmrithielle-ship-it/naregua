@@ -7,6 +7,9 @@ dist
 .wwebjs_cache
 *.log
 frontend/android/.gradle
+frontend/android/.gradle-home
+frontend/android/.android-home
+frontend/android/.idea/deploymentTargetSelector.xml
 frontend/android/local.properties
 frontend/android/build
 frontend/android/app/build

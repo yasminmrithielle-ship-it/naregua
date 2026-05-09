@@ -1,4 +1,4 @@
-package com.barbergo.admin;
+package com.visionsoft.agendabarber;
 
 import com.getcapacitor.BridgeActivity;
 

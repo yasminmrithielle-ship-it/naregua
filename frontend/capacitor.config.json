@@ -1,6 +1,6 @@
 {
-  "appId": "com.barbergo.admin",
-  "appName": "Barber Go",
+  "appId": "com.visionsoft.agendabarber",
+  "appName": "Agenda Barber",
   "webDir": "dist",
   "bundledWebRuntime": false,
   "server": {

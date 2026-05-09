@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Barber Go</string>
-    <string name="title_activity_main">Barber Go</string>
-    <string name="package_name">com.barbergo.admin</string>
-    <string name="custom_url_scheme">com.barbergo.admin</string>
+    <string name="app_name">Agenda Barber</string>
+    <string name="title_activity_main">Agenda Barber</string>
+    <string name="package_name">com.visionsoft.agendabarber</string>
+    <string name="custom_url_scheme">com.visionsoft.agendabarber</string>
 </resources>

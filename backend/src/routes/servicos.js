@@ -20,7 +20,7 @@ router.get("/servicos", requireOperationalUser, asyncHandler(async (req, res) =>
 
   const result = await query(
     `
-      SELECT id, barbearia_id, nome, duracao, preco
+      SELECT id, barbearia_id, nome, duracao, preco, ativo
       FROM servicos
       WHERE barbearia_id = $1
       ORDER BY nome ASC
@@ -63,7 +63,7 @@ router.post("/servicos", requireAdmin, asyncHandler(async (req, res) => {
     `
       INSERT INTO servicos (barbearia_id, nome, duracao, preco)
       VALUES ($1, $2, $3, $4)
-      RETURNING id, barbearia_id, nome, duracao, preco
+      RETURNING id, barbearia_id, nome, duracao, preco, ativo
     `,
     [currentBarbershop, nome, duracao, preco]
   );
@@ -122,10 +122,11 @@ router.put("/servicos/:id", requireAdmin, asyncHandler(async (req, res) => {
       UPDATE servicos
       SET nome = $1,
           duracao = $2,
-          preco = $3
+          preco = $3,
+          updated_at = NOW()
       WHERE id = $4
         AND barbearia_id = $5
-      RETURNING id, barbearia_id, nome, duracao, preco
+      RETURNING id, barbearia_id, nome, duracao, preco, ativo
     `,
     [nome, duracao, preco, id, currentBarbershop]
   );
@@ -133,9 +134,11 @@ router.put("/servicos/:id", requireAdmin, asyncHandler(async (req, res) => {
   await query(
     `
       UPDATE agendamentos
-      SET servico = $1
+      SET
+        servico = $1,
+        servico_nome = $1
       WHERE barbearia_id = $2
-        AND servico = $3
+        AND COALESCE(servico_nome, servico) = $3
     `,
     [nome, currentBarbershop, previousName]
   );
@@ -168,7 +171,7 @@ router.delete("/servicos/:id", requireAdmin, asyncHandler(async (req, res) => {
       SELECT COUNT(*)::int AS total
       FROM agendamentos
       WHERE barbearia_id = $1
-        AND servico = $2
+        AND COALESCE(servico_nome, servico) = $2
         AND status != 'cancelado'
     `,
     [currentBarbershop, service.nome]

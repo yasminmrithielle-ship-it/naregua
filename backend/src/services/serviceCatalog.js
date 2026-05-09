@@ -1,8 +1,4 @@
 import { query } from "../db.js";
-import {
-  DEFAULT_BARBERSHOP_ID,
-  DEFAULT_BARBERSHOP_NAME
-} from "../config.js";
 
 const DEFAULT_SERVICES = [
   { nome: "Corte", duracao: 60, preco: 35 },
@@ -21,18 +17,22 @@ function getExecutor(executor) {
 }
 
 export async function ensureDefaultServices(
-  barbeariaId = DEFAULT_BARBERSHOP_ID,
+  barbeariaId,
   executor
 ) {
+  if (!barbeariaId) {
+    throw new Error("barbeariaId obrigatorio para carregar o catalogo padrao.");
+  }
+
   const db = getExecutor(executor);
 
   await db.query(
     `
-      INSERT INTO barbearias (id, nome, slug, status)
-      VALUES ($1, $2, $3, 'active')
+      INSERT INTO barbearias (id, nome, slug, status, subscription_plan, plano)
+      VALUES ($1, $2, $3, 'teste', 'plano', 'Plano')
       ON CONFLICT (id) DO NOTHING
     `,
-    [barbeariaId, DEFAULT_BARBERSHOP_NAME, barbeariaId]
+    [barbeariaId, "Barbearia", `barbearia-${barbeariaId}`]
   );
 
   const existing = await db.query(

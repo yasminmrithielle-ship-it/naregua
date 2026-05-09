@@ -46,6 +46,10 @@ export function createBarbershopId() {
   return randomUUID();
 }
 
+function normalizePlanLabel(_plan = "plano") {
+  return "Plano";
+}
+
 export async function provisionBarbershopScaffold(
   executor,
   {
@@ -56,12 +60,14 @@ export async function provisionBarbershopScaffold(
     phone = null,
     whatsappNumber = null,
     address = null,
-    subscriptionPlan = "starter",
-    sessionName = null
+    subscriptionPlan = "plano",
+    sessionName = null,
+    timezone = "America/Sao_Paulo"
   }
 ) {
   const normalizedSlug = slug || (await buildUniqueSlug(name, executor));
-  const resolvedSessionName = sessionName || normalizedSlug;
+  const resolvedSessionName = sessionName || `barbearia-${barbershopId}`;
+  const resolvedSessionPath = `.wwebjs_auth/barbearia-${barbershopId}`;
 
   await executor.query(
     `
@@ -71,22 +77,46 @@ export async function provisionBarbershopScaffold(
         slug,
         logo_url,
         phone,
+        telefone,
         whatsapp_number,
         address,
         subscription_plan,
-        status
+        plano,
+        status,
+        timezone,
+        primary_color,
+        cor_primaria
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active')
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        'teste',
+        $10,
+        '#D4A64A',
+        '#D4A64A'
+      )
       ON CONFLICT (id) DO UPDATE
       SET
         nome = EXCLUDED.nome,
         slug = EXCLUDED.slug,
         logo_url = COALESCE(EXCLUDED.logo_url, barbearias.logo_url),
         phone = COALESCE(EXCLUDED.phone, barbearias.phone),
+        telefone = COALESCE(EXCLUDED.telefone, barbearias.telefone, barbearias.phone),
         whatsapp_number = COALESCE(EXCLUDED.whatsapp_number, barbearias.whatsapp_number),
         address = COALESCE(EXCLUDED.address, barbearias.address),
         subscription_plan = COALESCE(EXCLUDED.subscription_plan, barbearias.subscription_plan),
-        updated_at = NOW()
+        plano = COALESCE(EXCLUDED.plano, barbearias.plano),
+        timezone = COALESCE(EXCLUDED.timezone, barbearias.timezone),
+        updated_at = NOW(),
+        atualizado_em = NOW()
     `,
     [
       barbershopId,
@@ -96,7 +126,9 @@ export async function provisionBarbershopScaffold(
       phone,
       whatsappNumber,
       address,
-      subscriptionPlan
+      subscriptionPlan,
+      normalizePlanLabel(subscriptionPlan),
+      timezone
     ]
   );
 
@@ -139,22 +171,41 @@ export async function provisionBarbershopScaffold(
       INSERT INTO conexoes_whatsapp (
         barbearia_id,
         session_name,
+        session_path,
         phone_number,
+        telefone_conectado,
         provider,
         status,
         webhook_secret,
         ativo
       )
-      VALUES ($1, $2, $3, 'whatsapp-web.js', 'disconnected', gen_random_uuid()::text, true)
-      ON CONFLICT (session_name) DO NOTHING
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $4,
+        'whatsapp-web.js',
+        'aguardando_qr',
+        gen_random_uuid()::text,
+        true
+      )
+      ON CONFLICT (barbearia_id) DO UPDATE
+      SET
+        session_name = EXCLUDED.session_name,
+        session_path = EXCLUDED.session_path,
+        phone_number = COALESCE(EXCLUDED.phone_number, conexoes_whatsapp.phone_number),
+        updated_at = NOW(),
+        atualizado_em = NOW()
     `,
-    [barbershopId, resolvedSessionName, whatsappNumber]
+    [barbershopId, resolvedSessionName, resolvedSessionPath, whatsappNumber]
   );
 
   return {
     barbershopId,
     slug: normalizedSlug,
-    sessionName: resolvedSessionName
+    sessionName: resolvedSessionName,
+    sessionPath: resolvedSessionPath
   };
 }
 
@@ -185,7 +236,7 @@ export async function ensureChatbotScaffoldForActiveBarbershops(executor = { que
         true,
         true
       FROM barbearias b
-      WHERE b.status = 'active'
+      WHERE b.status IN ('ativo', 'teste', 'active')
         AND NOT EXISTS (
           SELECT 1
           FROM chatbot_configuracoes c
@@ -199,7 +250,9 @@ export async function ensureChatbotScaffoldForActiveBarbershops(executor = { que
       INSERT INTO conexoes_whatsapp (
         barbearia_id,
         session_name,
+        session_path,
         phone_number,
+        telefone_conectado,
         provider,
         status,
         webhook_secret,
@@ -207,21 +260,21 @@ export async function ensureChatbotScaffoldForActiveBarbershops(executor = { que
       )
       SELECT
         b.id,
-        COALESCE(NULLIF(b.slug, ''), b.id),
+        'barbearia-' || b.id,
+        '.wwebjs_auth/barbearia-' || b.id,
+        b.whatsapp_number,
         b.whatsapp_number,
         'whatsapp-web.js',
-        'disconnected',
+        'aguardando_qr',
         gen_random_uuid()::text,
         true
       FROM barbearias b
-      WHERE b.status = 'active'
+      WHERE b.status IN ('ativo', 'teste', 'active')
         AND NOT EXISTS (
           SELECT 1
           FROM conexoes_whatsapp c
           WHERE c.barbearia_id = b.id
-            AND c.ativo = true
         )
-      ON CONFLICT (session_name) DO NOTHING
     `
   );
 }
@@ -254,6 +307,20 @@ export async function getBarbershopDisplayName(barbershopId) {
   return result.rows[0]?.nome || "sua barbearia";
 }
 
+function mapConnectionRow(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    ...row,
+    telefone_conectado: row.telefone_conectado || row.phone_number,
+    ultima_conexao: row.ultima_conexao || row.last_connected_at,
+    qr_data_url: row.qr_data_url || null,
+    session_path: row.session_path || `.wwebjs_auth/barbearia-${row.barbearia_id}`
+  };
+}
+
 export async function getPrimaryWhatsAppConnection(barbershopId) {
   const result = await query(
     `
@@ -267,7 +334,7 @@ export async function getPrimaryWhatsAppConnection(barbershopId) {
     [barbershopId]
   );
 
-  return result.rows[0] || null;
+  return mapConnectionRow(result.rows[0] || null);
 }
 
 export async function listActiveWhatsAppConnections() {
@@ -280,31 +347,34 @@ export async function listActiveWhatsAppConnections() {
     `
   );
 
-  return result.rows;
+  return result.rows.map(mapConnectionRow);
 }
 
-export async function getChatbotContextBySessionName(sessionName) {
+async function getChatbotContextWhere(whereClause, value) {
   const result = await query(
     `
       SELECT
         c.id AS connection_id,
         c.session_name,
+        c.session_path,
         c.phone_number,
+        c.telefone_conectado,
         c.provider,
         c.status AS connection_status,
         c.qr_code,
-        c.last_connected_at,
+        c.qr_data_url,
+        COALESCE(c.ultima_conexao, c.last_connected_at) AS last_connected_at,
         c.barbearia_id,
         b.nome AS barbearia_nome,
         b.slug AS barbearia_slug,
         b.logo_url,
-        b.phone AS phone,
+        COALESCE(b.telefone, b.phone) AS telefone,
         b.whatsapp_number,
         b.address,
-        b.subscription_plan,
+        COALESCE(b.plano, b.subscription_plan) AS plano,
         b.status AS barbearia_status,
         b.timezone,
-        b.primary_color,
+        COALESCE(b.cor_primaria, b.primary_color) AS cor_primaria,
         b.accent_color,
         s.assistant_name,
         s.welcome_message,
@@ -320,37 +390,66 @@ export async function getChatbotContextBySessionName(sessionName) {
         ON b.id = c.barbearia_id
       LEFT JOIN chatbot_configuracoes s
         ON s.barbearia_id = b.id
-      WHERE c.session_name = $1
+      WHERE ${whereClause}
         AND c.ativo = true
       LIMIT 1
     `,
-    [sessionName]
+    [value]
   );
 
   return result.rows[0] || null;
 }
 
+export async function getChatbotContextBySessionName(sessionName) {
+  return getChatbotContextWhere("c.session_name = $1", sessionName);
+}
+
+export async function getChatbotContextByBarbershopId(barbershopId) {
+  return getChatbotContextWhere("c.barbearia_id = $1", barbershopId);
+}
+
 export async function updateWhatsAppConnectionSync({
-  sessionName,
+  barbeariaId = null,
+  sessionName = null,
   status,
   qrCode = null,
+  qrDataUrl = null,
   phoneNumber = null,
   lastConnectedAt = null
 }) {
+  const identifier = barbeariaId || sessionName;
+
+  if (!identifier) {
+    return null;
+  }
+
   const result = await query(
     `
       UPDATE conexoes_whatsapp
       SET
-        status = COALESCE($2, status),
-        qr_code = $3,
-        phone_number = COALESCE($4, phone_number),
-        last_connected_at = COALESCE($5::timestamp, last_connected_at),
-        updated_at = NOW()
-      WHERE session_name = $1
+        status = COALESCE($3, status),
+        qr_code = $4,
+        qr_data_url = $5,
+        phone_number = COALESCE($6, phone_number),
+        telefone_conectado = COALESCE($6, telefone_conectado),
+        last_connected_at = COALESCE($7::timestamp, last_connected_at),
+        ultima_conexao = COALESCE($7::timestamp, ultima_conexao),
+        updated_at = NOW(),
+        atualizado_em = NOW()
+      WHERE ($1::text IS NOT NULL AND barbearia_id = $1)
+         OR ($2::text IS NOT NULL AND session_name = $2)
       RETURNING *
     `,
-    [sessionName, status || null, qrCode, phoneNumber, lastConnectedAt]
+    [
+      barbeariaId,
+      sessionName,
+      status || null,
+      qrCode,
+      qrDataUrl,
+      phoneNumber,
+      lastConnectedAt
+    ]
   );
 
-  return result.rows[0] || null;
+  return mapConnectionRow(result.rows[0] || null);
 }

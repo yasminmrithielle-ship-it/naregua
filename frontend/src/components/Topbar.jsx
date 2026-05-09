@@ -1,19 +1,32 @@
 import { useBarbershop } from "../hooks/useBarbershop.js";
+import { useTheme } from "../hooks/useTheme.js";
 
-export default function Topbar({ title, subtitle }) {
-  const { barbershop } = useBarbershop();
+export default function Topbar({ title, subtitle, actions = null }) {
+  const { barbershop, saasSubscription, whatsappConnection } = useBarbershop();
+  const { theme, toggleTheme } = useTheme();
+
+  const whatsappStatus =
+    whatsappConnection?.runtimeStatus?.status ||
+    whatsappConnection?.status ||
+    "aguardando_qr";
 
   return (
-    <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-      <div className="flex flex-col gap-2">
-        <p className="text-sm uppercase tracking-[0.3em] text-ink/60">{subtitle}</p>
-        <h2 className="font-display text-3xl">{title}</h2>
-      </div>
-      <div className="rounded-2xl border border-ink/10 bg-white/60 px-4 py-3 text-sm text-ink/65">
-        <p className="font-medium text-ink">{barbershop?.name || "Barbearia"}</p>
-        <p className="text-xs mt-1">
-          {barbershop?.subscriptionPlan || "starter"} | {barbershop?.whatsappNumber || "WhatsApp pendente"}
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <div className="min-w-0">
+        <p className="text-xs uppercase tracking-[0.3em] muted-copy">{subtitle}</p>
+        <h2 className="mt-2 font-display text-3xl sm:text-4xl">{title}</h2>
+        <p className="mt-3 text-sm muted-copy">
+          {barbershop?.name || "Barbearia"} • {saasSubscription?.plano_nome || "Plano"} •
+          {" "}
+          WhatsApp {whatsappStatus}
         </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        {actions}
+        <button className="secondary-button" onClick={toggleTheme} type="button">
+          {theme === "dark" ? "Modo claro" : "Modo escuro"}
+        </button>
       </div>
     </div>
   );

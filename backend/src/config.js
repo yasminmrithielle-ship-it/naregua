@@ -2,17 +2,6 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-export const DEFAULT_BARBERSHOP_ID = process.env.SEED_BARBERSHOP_ID || "default";
-export const DEFAULT_BARBERSHOP_NAME =
-  process.env.SEED_BARBERSHOP_NAME ||
-  process.env.BARBEARIA_NOME ||
-  "Barbearia Principal";
-export const BARBERSHOP_TIMEZONE =
-  process.env.BARBEARIA_TIMEZONE || "America/Sao_Paulo";
-
-const DEFAULT_ADMIN_USERNAME = "admin";
-const DEFAULT_ADMIN_PASSWORD = "admin123";
-const DEFAULT_OWNER_EMAIL = "admin@barbergo.local";
 const DEFAULT_CHATBOT_SECRET = "barbergo-chatbot-secret";
 const DATABASE_PLACEHOLDERS = ["PROJECT_REF", "REGION", "SENHA_REAL", "SUA_SENHA"];
 const RAILWAY_ENV_KEYS = [
@@ -23,9 +12,8 @@ const RAILWAY_ENV_KEYS = [
   "RAILWAY_STATIC_URL"
 ];
 
-export function getPublicApiUrl() {
-  return process.env.API_URL || "";
-}
+export const BARBERSHOP_TIMEZONE =
+  process.env.BARBEARIA_TIMEZONE || "America/Sao_Paulo";
 
 function normalizePublicUrl(value) {
   const raw = String(value || "").trim().replace(/\/+$/, "");
@@ -41,6 +29,10 @@ function normalizePublicUrl(value) {
   }
 }
 
+export function getPublicApiUrl() {
+  return normalizePublicUrl(process.env.API_URL || "");
+}
+
 export function getPublicChatbotUrl() {
   const candidates = [
     process.env.CHATBOT_PUBLIC_URL || "",
@@ -50,6 +42,7 @@ export function getPublicChatbotUrl() {
 
   for (const candidate of candidates) {
     const normalized = normalizePublicUrl(candidate);
+
     if (normalized) {
       return normalized;
     }
@@ -76,6 +69,10 @@ export function getDatabaseUrl() {
   return process.env.DATABASE_URL || "";
 }
 
+export function getJwtSecret() {
+  return String(process.env.JWT_SECRET || "").trim();
+}
+
 export function getChatbotEnabled() {
   return process.env.CHATBOT_ENABLED === "true";
 }
@@ -85,27 +82,35 @@ export function getChatbotInternalSecret() {
 }
 
 export function getSessionTtlDays() {
-  return Number(process.env.SESSION_TTL_DAYS || 30);
+  return Number(process.env.JWT_TTL_DAYS || 7);
+}
+
+export function getSaasTrialDays() {
+  return Number(process.env.SAAS_TRIAL_DAYS || 14);
+}
+
+export function getCorsOrigins() {
+  return String(process.env.CORS_ORIGINS || process.env.API_URL || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 export function getSeedConfig() {
-  const legacyAdminUser = process.env.ADMIN_USER || DEFAULT_ADMIN_USERNAME;
-  const ownerEmail =
-    process.env.SEED_OWNER_EMAIL ||
-    (legacyAdminUser.includes("@")
-      ? legacyAdminUser.toLowerCase()
-      : DEFAULT_OWNER_EMAIL);
+  const ownerEmail = String(process.env.SEED_OWNER_EMAIL || "").trim().toLowerCase();
+  const ownerPassword = String(process.env.SEED_OWNER_PASSWORD || "").trim();
+  const barbershopName = String(process.env.SEED_BARBERSHOP_NAME || "").trim();
+
+  if (!ownerEmail || !ownerPassword || !barbershopName) {
+    return null;
+  }
 
   return {
     ownerName: process.env.SEED_OWNER_NAME || "Administrador",
     ownerEmail,
-    ownerPassword:
-      process.env.SEED_OWNER_PASSWORD ||
-      process.env.ADMIN_PASS ||
-      DEFAULT_ADMIN_PASSWORD,
-    barbershopName: DEFAULT_BARBERSHOP_NAME,
-    barbershopSlug:
-      process.env.SEED_BARBERSHOP_SLUG || process.env.BARBEARIA_SLUG || "barbearia-principal",
+    ownerPassword,
+    barbershopName,
+    barbershopSlug: process.env.SEED_BARBERSHOP_SLUG || "barbearia-demo",
     phone: process.env.SEED_BARBERSHOP_PHONE || null,
     whatsappNumber: process.env.SEED_WHATSAPP_NUMBER || null,
     address: process.env.SEED_BARBERSHOP_ADDRESS || null
@@ -118,7 +123,6 @@ export function isRailwayRuntime() {
 
 export function getRuntimeSummary() {
   const databaseUrl = getDatabaseUrl();
-  const seed = getSeedConfig();
   let databaseHost = "";
 
   try {
@@ -133,8 +137,8 @@ export function getRuntimeSummary() {
     databaseHost,
     chatbotEnabled: getChatbotEnabled(),
     hasDatabaseUrl: Boolean(databaseUrl),
-    seedBarbershop: seed.barbershopName,
-    seedOwnerEmail: seed.ownerEmail
+    hasJwtSecret: Boolean(getJwtSecret()),
+    corsOrigins: getCorsOrigins()
   };
 }
 
@@ -144,7 +148,6 @@ export function validateRuntimeConfig() {
   const databaseUrl = getDatabaseUrl();
   const apiUrl = getPublicApiUrl();
   const railwayRuntime = isRailwayRuntime();
-  const seed = getSeedConfig();
 
   if (!databaseUrl) {
     errors.push("DATABASE_URL nao configurada.");
@@ -167,19 +170,19 @@ export function validateRuntimeConfig() {
           );
         } else {
           warnings.push(
-            "DATABASE_URL esta usando o host direto db.<projeto>.supabase.co. Isso pode funcionar localmente, mas ambientes Windows/IPv4 podem falhar por IPv6; prefira a URI de Connection Pooling (...pooler.supabase.com)."
+            "DATABASE_URL esta usando o host direto db.<projeto>.supabase.co. Ambientes Windows/IPv4 podem falhar por IPv6; prefira a URI de Connection Pooling (...pooler.supabase.com)."
           );
         }
-      }
-
-      if (!parsed.username || !parsed.password) {
-        warnings.push(
-          "DATABASE_URL parece sem usuario ou senha completos. Confira a URI copiada do banco."
-        );
       }
     } catch (error) {
       errors.push("DATABASE_URL esta em formato invalido.");
     }
+  }
+
+  if (!getJwtSecret()) {
+    errors.push("JWT_SECRET nao configurado.");
+  } else if (getJwtSecret().length < 24) {
+    warnings.push("JWT_SECRET esta curto. Prefira um segredo com 24+ caracteres.");
   }
 
   if (!apiUrl) {
@@ -190,20 +193,6 @@ export function validateRuntimeConfig() {
     errors.push("API_URL deve comecar com http:// ou https://");
   }
 
-  if (!seed.ownerEmail) {
-    errors.push("SEED_OWNER_EMAIL nao configurado.");
-  }
-
-  if (!seed.ownerPassword) {
-    errors.push("SEED_OWNER_PASSWORD/ADMIN_PASS nao configurado.");
-  }
-
-  if (seed.ownerPassword === DEFAULT_ADMIN_PASSWORD) {
-    warnings.push(
-      "A senha inicial da conta proprietaria ainda esta com o padrao admin123. Troque antes de publicar."
-    );
-  }
-
   if (getChatbotEnabled() && getChatbotInternalSecret() === DEFAULT_CHATBOT_SECRET) {
     warnings.push(
       "CHATBOT_INTERNAL_SECRET esta com o valor padrao. Troque antes de expor o ambiente em producao."
@@ -212,7 +201,13 @@ export function validateRuntimeConfig() {
 
   if (!getChatbotEnabled() && !getPublicChatbotUrl()) {
     warnings.push(
-      "CHATBOT_PUBLIC_URL/VITE_CHATBOT_URL nao configurado. O painel so exibira QR se o chatbot estiver integrado neste mesmo servico."
+      "CHATBOT_PUBLIC_URL/VITE_CHATBOT_URL nao configurado. O painel exibira apenas status local do chatbot."
+    );
+  }
+
+  if (!getSeedConfig()) {
+    warnings.push(
+      "Seed inicial desativado. Use /auth/register para criar a primeira barbearia SaaS."
     );
   }
 

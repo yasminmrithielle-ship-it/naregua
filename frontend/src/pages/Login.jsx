@@ -6,13 +6,13 @@ import { useAuth } from "../hooks/useAuth.js";
 export default function Login() {
   const navigate = useNavigate();
   const { isAuthenticated, login } = useAuth();
-  const [form, setForm] = useState({ email: "", password: "" });
+  const [form, setForm] = useState({ login: "", password: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (isAuthenticated) {
-      navigate("/dashboard", { replace: true });
+      navigate("/app/dashboard", { replace: true });
     }
   }, [isAuthenticated, navigate]);
 
@@ -22,8 +22,11 @@ export default function Login() {
     setLoading(true);
 
     try {
-      await login(form);
-      navigate("/dashboard", { replace: true });
+      await login({
+        username: form.login,
+        password: form.password
+      });
+      navigate("/app/dashboard", { replace: true });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -79,20 +82,20 @@ export default function Login() {
       </p>
       <form onSubmit={handleSubmit} className="mt-8 flex flex-col gap-4">
         <label className="flex flex-col gap-2 text-sm text-ink/70">
-          Email
+          Login ou email
           <input
             className="rounded-2xl border border-ink/10 bg-white/80 px-4 py-3 text-ink outline-none transition focus:border-ink/30 focus:ring-2 focus:ring-accent/20"
-            placeholder="voce@barbergo.com"
-            type="email"
-            value={form.email}
-            onChange={(event) => setForm({ ...form, email: event.target.value })}
+            placeholder="admin"
+            type="text"
+            value={form.login}
+            onChange={(event) => setForm({ ...form, login: event.target.value })}
           />
         </label>
         <label className="flex flex-col gap-2 text-sm text-ink/70">
           Senha
           <input
             className="rounded-2xl border border-ink/10 bg-white/80 px-4 py-3 text-ink outline-none transition focus:border-ink/30 focus:ring-2 focus:ring-accent/20"
-            placeholder="Sua senha"
+            placeholder="admin"
             type="password"
             value={form.password}
             onChange={(event) => setForm({ ...form, password: event.target.value })}

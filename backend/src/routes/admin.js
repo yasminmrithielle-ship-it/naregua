@@ -1,6 +1,7 @@
 import express from "express";
 import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
+import { loginRateLimit } from "../middleware/loginRateLimit.js";
 import {
   getSessionFromToken,
   loginUser,
@@ -8,6 +9,10 @@ import {
   revokeSession,
   switchSessionBarbershop
 } from "../services/authService.js";
+import {
+  clearLoginFailures,
+  registerLoginFailure
+} from "../services/loginRateLimitService.js";
 
 const router = express.Router();
 
@@ -50,6 +55,14 @@ function getRequestMetadata(req) {
   };
 }
 
+function getRequestIp(req) {
+  return (
+    req.headers["x-forwarded-for"]?.toString().split(",")[0].trim() ||
+    req.socket.remoteAddress ||
+    null
+  );
+}
+
 router.post("/auth/register", async (req, res) => {
   const parsed = registerSchema.safeParse(req.body || {});
 
@@ -73,7 +86,7 @@ router.post("/auth/register", async (req, res) => {
   }
 });
 
-router.post("/auth/login", async (req, res) => {
+router.post("/auth/login", loginRateLimit, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body || {});
 
   if (!parsed.success) {
@@ -84,6 +97,7 @@ router.post("/auth/login", async (req, res) => {
   }
 
   const email = parsed.data.email || parsed.data.username;
+  const requestIp = getRequestIp(req);
 
   try {
     const session = await loginUser({
@@ -94,8 +108,10 @@ router.post("/auth/login", async (req, res) => {
       ...getRequestMetadata(req)
     });
 
+    clearLoginFailures(requestIp, email);
     return res.json(session);
   } catch (error) {
+    registerLoginFailure(requestIp, email);
     return res.status(401).json({ error: error.message || "Credenciais invalidas" });
   }
 });

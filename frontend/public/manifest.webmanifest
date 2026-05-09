@@ -1,6 +1,6 @@
 {
-  "name": "Barber Go",
-  "short_name": "Barber Go",
+  "name": "Agenda Barber",
+  "short_name": "Agenda Barber",
   "description": "Painel administrativo de agendamentos, horarios, servicos e assinaturas.",
   "lang": "pt-BR",
   "start_url": "/dashboard",

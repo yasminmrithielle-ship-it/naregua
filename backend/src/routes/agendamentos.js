@@ -16,17 +16,22 @@ import {
   cancelAppointmentReminders,
   scheduleAppointmentReminders
 } from "../services/reminderScheduler.js";
-import { deactivateExpiredOpenSlots, getCurrentSlotReference } from "../services/slotExpiry.js";
+import {
+  deactivateExpiredOpenSlots,
+  getCurrentSlotReference
+} from "../services/slotExpiry.js";
+import { assertFeatureAccess } from "../services/saasService.js";
 
 const router = express.Router();
 
-const agendarSchema = z.object({
+const appointmentSchema = z.object({
   barbeariaId: z.string().optional(),
-  nome: z.string(),
-  telefone: z.string(),
-  data: z.string(),
-  hora: z.string(),
-  servico: z.string()
+  nome: z.string().trim().min(2, "Nome obrigatorio"),
+  telefone: z.string().trim().min(8, "Telefone obrigatorio"),
+  data: z.string().trim().min(10, "Data obrigatoria"),
+  hora: z.string().trim().min(4, "Hora obrigatoria"),
+  servico: z.string().trim().min(2, "Servico obrigatorio"),
+  barbeiroId: z.string().trim().optional()
 });
 
 function asExecutor(client) {
@@ -57,7 +62,7 @@ function resolveBarbershopId(req, explicitBarbershopId) {
 async function ensureServiceExists(client, servico, barbeariaId) {
   const serviceResult = await client.query(
     `
-      SELECT id
+      SELECT id, nome
       FROM servicos
       WHERE barbearia_id = $1
         AND nome = $2
@@ -67,13 +72,17 @@ async function ensureServiceExists(client, servico, barbeariaId) {
     [barbeariaId, servico]
   );
 
-  return serviceResult.rows.length > 0;
+  return serviceResult.rows[0] || null;
 }
 
 async function upsertCustomer(client, { barbeariaId, nome, telefone }) {
   const result = await client.query(
     `
-      INSERT INTO clientes (barbearia_id, nome, telefone)
+      INSERT INTO clientes (
+        barbearia_id,
+        nome,
+        telefone
+      )
       VALUES ($1, $2, $3)
       ON CONFLICT (barbearia_id, telefone) DO UPDATE
       SET
@@ -87,18 +96,123 @@ async function upsertCustomer(client, { barbeariaId, nome, telefone }) {
   return result.rows[0];
 }
 
-router.post("/agendar", attachAuth, asyncHandler(async (req, res) => {
-  const parsed = agendarSchema.safeParse(req.body);
+async function createAppointmentRecord(client, payload) {
+  const inserted = await client.query(
+    `
+      INSERT INTO agendamentos (
+        barbearia_id,
+        cliente_id,
+        barbeiro_id,
+        cliente_nome,
+        cliente_telefone,
+        nome,
+        telefone,
+        data,
+        hora,
+        servico_id,
+        servico_nome,
+        servico,
+        status,
+        origem
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $4,
+        $5,
+        $6::date,
+        $7,
+        $8,
+        $9,
+        $9,
+        'confirmado',
+        $10
+      )
+      RETURNING *
+    `,
+    [
+      payload.barbeariaId,
+      payload.clienteId,
+      payload.barbeiroId || null,
+      payload.nome,
+      payload.telefone,
+      payload.data,
+      payload.hora,
+      payload.servicoId,
+      payload.servicoNome,
+      payload.origem
+    ]
+  );
+
+  return inserted.rows[0];
+}
+
+async function reserveSlot(client, barbeariaId, data, hora) {
+  await client.query(
+    `
+      UPDATE horarios
+      SET disponivel = false
+      WHERE data = $1
+        AND hora = $2
+        AND barbearia_id = $3
+    `,
+    [data, hora, barbeariaId]
+  );
+}
+
+async function releaseSlot(client, barbeariaId, data, hora) {
+  await client.query(
+    `
+      UPDATE horarios
+      SET disponivel = true
+      WHERE data = $1
+        AND hora = $2
+        AND barbearia_id = $3
+    `,
+    [data, hora, barbeariaId]
+  );
+}
+
+async function ensureSlotAvailable(client, { barbeariaId, data, hora, appointmentId = null }) {
+  const disponibilidade = await client.query(
+    `
+      SELECT h.id
+      FROM horarios h
+      LEFT JOIN agendamentos a
+        ON a.data = h.data
+       AND a.hora = h.hora
+       AND a.status != 'cancelado'
+       AND a.barbearia_id = h.barbearia_id
+       AND ($4::int IS NULL OR a.id != $4)
+      WHERE h.data = $1
+        AND h.hora = $2
+        AND h.disponivel = true
+        AND h.barbearia_id = $3
+        AND a.id IS NULL
+      LIMIT 1
+    `,
+    [data, hora, barbeariaId, appointmentId]
+  );
+
+  return disponibilidade.rows.length > 0;
+}
+
+async function createAppointmentHandler(req, res) {
+  const parsed = appointmentSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: "Dados invalidos", details: parsed.error.flatten() });
   }
 
-  const { barbeariaId, nome, telefone, data, hora, servico } = parsed.data;
+  const { barbeariaId, nome, telefone, data, hora, servico, barbeiroId } = parsed.data;
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
     const currentBarbershop = resolveBarbershopId(req, barbeariaId);
+    await assertFeatureAccess(currentBarbershop, "appointments");
     await deactivateExpiredOpenSlots(
       currentBarbershop,
       req.auth?.barbershop?.timezone
@@ -113,33 +227,20 @@ router.post("/agendar", attachAuth, asyncHandler(async (req, res) => {
     }
 
     await ensureDefaultServices(currentBarbershop, client);
-    const serviceExists = await ensureServiceExists(client, servico, currentBarbershop);
+    const service = await ensureServiceExists(client, servico, currentBarbershop);
 
-    if (!serviceExists) {
+    if (!service) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "Servico nao cadastrado no catalogo" });
     }
 
-    const disponibilidade = await client.query(
-      `
-        SELECT h.id
-        FROM horarios h
-        LEFT JOIN agendamentos a
-          ON a.data = h.data
-         AND a.hora = h.hora
-         AND a.status != 'cancelado'
-         AND a.barbearia_id = h.barbearia_id
-        WHERE h.data = $1
-          AND h.hora = $2
-          AND h.disponivel = true
-          AND h.barbearia_id = $3
-          AND a.id IS NULL
-        LIMIT 1
-      `,
-      [data, hora, currentBarbershop]
-    );
+    const isSlotAvailable = await ensureSlotAvailable(client, {
+      barbeariaId: currentBarbershop,
+      data,
+      hora
+    });
 
-    if (disponibilidade.rows.length === 0) {
+    if (!isSlotAvailable) {
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "Horario indisponivel" });
     }
@@ -150,36 +251,20 @@ router.post("/agendar", attachAuth, asyncHandler(async (req, res) => {
       telefone
     });
 
-    const inserted = await client.query(
-      `
-        INSERT INTO agendamentos
-          (barbearia_id, cliente_id, nome, telefone, data, hora, servico, status, origem)
-        VALUES
-          ($1, $2, $3, $4, $5, $6, $7, 'confirmado', $8)
-        RETURNING *
-      `,
-      [
-        currentBarbershop,
-        customer.id,
-        nome,
-        telefone,
-        data,
-        hora,
-        servico,
-        req.auth ? "panel" : "chatbot"
-      ]
-    );
+    const agendamento = await createAppointmentRecord(client, {
+      barbeariaId: currentBarbershop,
+      clienteId: customer.id,
+      barbeiroId,
+      nome,
+      telefone,
+      data,
+      hora,
+      servicoId: service.id,
+      servicoNome: service.nome,
+      origem: req.auth ? "painel" : "app"
+    });
 
-    await client.query(
-      `
-        UPDATE horarios
-        SET disponivel = false
-        WHERE data = $1 AND hora = $2 AND barbearia_id = $3
-      `,
-      [data, hora, currentBarbershop]
-    );
-
-    const agendamento = inserted.rows[0];
+    await reserveSlot(client, currentBarbershop, data, hora);
     await scheduleAppointmentReminders(asExecutor(client), agendamento);
     await client.query("COMMIT");
 
@@ -198,11 +283,17 @@ router.post("/agendar", attachAuth, asyncHandler(async (req, res) => {
     if (error.message?.includes("barbeariaId")) {
       return res.status(400).json({ error: error.message });
     }
+    if (error.message?.includes("assinatura")) {
+      return res.status(403).json({ error: error.message });
+    }
     return res.status(500).json({ error: "Falha ao agendar" });
   } finally {
     client.release();
   }
-}));
+}
+
+router.post("/agendar", attachAuth, asyncHandler(createAppointmentHandler));
+router.post("/agendamentos", attachAuth, asyncHandler(createAppointmentHandler));
 
 router.get("/agendamentos", requireOperationalUser, asyncHandler(async (req, res) => {
   const { data } = req.query;
@@ -223,7 +314,7 @@ router.get("/agendamentos", requireOperationalUser, asyncHandler(async (req, res
 
 router.put("/agendamento/:id", requireAdmin, asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { status, servico, data, hora, nome, telefone } = req.body || {};
+  const { status, servico, data, hora, nome, telefone, barbeiroId } = req.body || {};
   const currentBarbershop = req.auth.membership.barbershopId;
   const client = await pool.connect();
 
@@ -248,71 +339,48 @@ router.put("/agendamento/:id", requireAdmin, asyncHandler(async (req, res) => {
 
     const agendamentoAtual = atual.rows[0];
     await ensureDefaultServices(agendamentoAtual.barbearia_id, client);
-    const novoServico = servico || agendamentoAtual.servico;
-    const serviceExists = await ensureServiceExists(
+    const novoServico = servico || agendamentoAtual.servico_nome || agendamentoAtual.servico;
+    const service = await ensureServiceExists(
       client,
       novoServico,
       agendamentoAtual.barbearia_id
     );
 
-    if (!serviceExists) {
+    if (!service) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "Servico nao cadastrado no catalogo" });
     }
 
-    const novaData = data || agendamentoAtual.data;
+    const novaData = data || String(agendamentoAtual.data).slice(0, 10);
     const novaHora = hora || agendamentoAtual.hora;
     const mudouSlot =
-      String(novaData) !== String(agendamentoAtual.data) ||
+      String(novaData) !== String(agendamentoAtual.data).slice(0, 10) ||
       String(novaHora) !== String(agendamentoAtual.hora);
 
     if (mudouSlot) {
-      const disponibilidade = await client.query(
-        `
-          SELECT h.id
-          FROM horarios h
-          LEFT JOIN agendamentos a
-            ON a.data = h.data
-           AND a.hora = h.hora
-           AND a.status != 'cancelado'
-           AND a.barbearia_id = h.barbearia_id
-           AND a.id != $4
-          WHERE h.data = $1
-            AND h.hora = $2
-            AND h.barbearia_id = $3
-            AND h.disponivel = true
-            AND a.id IS NULL
-          LIMIT 1
-        `,
-        [novaData, novaHora, agendamentoAtual.barbearia_id, id]
-      );
+      const available = await ensureSlotAvailable(client, {
+        barbeariaId: agendamentoAtual.barbearia_id,
+        data: novaData,
+        hora: novaHora,
+        appointmentId: Number(id)
+      });
 
-      if (!disponibilidade.rows.length) {
+      if (!available) {
         await client.query("ROLLBACK");
         return res.status(409).json({ error: "Novo horario indisponivel" });
       }
 
-      await client.query(
-        `
-          UPDATE horarios
-          SET disponivel = true
-          WHERE data = $1 AND hora = $2 AND barbearia_id = $3
-        `,
-        [agendamentoAtual.data, agendamentoAtual.hora, agendamentoAtual.barbearia_id]
+      await releaseSlot(
+        client,
+        agendamentoAtual.barbearia_id,
+        String(agendamentoAtual.data).slice(0, 10),
+        agendamentoAtual.hora
       );
-
-      await client.query(
-        `
-          UPDATE horarios
-          SET disponivel = false
-          WHERE data = $1 AND hora = $2 AND barbearia_id = $3
-        `,
-        [novaData, novaHora, agendamentoAtual.barbearia_id]
-      );
+      await reserveSlot(client, agendamentoAtual.barbearia_id, novaData, novaHora);
     }
 
-    const nextName = nome || agendamentoAtual.nome;
-    const nextPhone = telefone || agendamentoAtual.telefone;
+    const nextName = nome || agendamentoAtual.cliente_nome || agendamentoAtual.nome;
+    const nextPhone = telefone || agendamentoAtual.cliente_telefone || agendamentoAtual.telefone;
     const customer = await upsertCustomer(client, {
       barbeariaId: currentBarbershop,
       nome: nextName,
@@ -322,25 +390,34 @@ router.put("/agendamento/:id", requireAdmin, asyncHandler(async (req, res) => {
     const result = await client.query(
       `
         UPDATE agendamentos
-        SET status = COALESCE($1, status),
-            servico = COALESCE($2, servico),
-            data = COALESCE($3, data),
-            hora = COALESCE($4, hora),
-            nome = COALESCE($5, nome),
-            telefone = COALESCE($6, telefone),
-            cliente_id = COALESCE($7, cliente_id)
-        WHERE id = $8
-          AND barbearia_id = $9
+        SET
+          status = COALESCE($1, status),
+          servico_id = COALESCE($2, servico_id),
+          servico_nome = COALESCE($3, servico_nome),
+          servico = COALESCE($3, servico),
+          data = COALESCE($4::date, data),
+          hora = COALESCE($5, hora),
+          cliente_nome = COALESCE($6, cliente_nome, nome),
+          nome = COALESCE($6, nome),
+          cliente_telefone = COALESCE($7, cliente_telefone, telefone),
+          telefone = COALESCE($7, telefone),
+          cliente_id = COALESCE($8, cliente_id),
+          barbeiro_id = COALESCE($9, barbeiro_id),
+          updated_at = NOW()
+        WHERE id = $10
+          AND barbearia_id = $11
         RETURNING *
       `,
       [
         status || null,
-        servico || null,
+        service.id,
+        service.nome,
         data || null,
         hora || null,
         nome || null,
         telefone || null,
         customer.id,
+        barbeiroId || null,
         id,
         currentBarbershop
       ]
@@ -375,7 +452,9 @@ router.delete("/agendamento/:id", requireAdmin, asyncHandler(async (req, res) =>
     const result = await client.query(
       `
         UPDATE agendamentos
-        SET status = 'cancelado'
+        SET
+          status = 'cancelado',
+          updated_at = NOW()
         WHERE id = $1
           AND barbearia_id = $2
         RETURNING *
@@ -390,13 +469,11 @@ router.delete("/agendamento/:id", requireAdmin, asyncHandler(async (req, res) =>
 
     const agendamento = result.rows[0];
 
-    await client.query(
-      `
-        UPDATE horarios
-        SET disponivel = true
-        WHERE data = $1 AND hora = $2 AND barbearia_id = $3
-      `,
-      [agendamento.data, agendamento.hora, agendamento.barbearia_id]
+    await releaseSlot(
+      client,
+      agendamento.barbearia_id,
+      String(agendamento.data).slice(0, 10),
+      agendamento.hora
     );
 
     await cancelAppointmentReminders(asExecutor(client), id);
@@ -446,7 +523,9 @@ router.post("/agendamento/:id/concluir", requireOperationalUser, asyncHandler(as
     const result = await client.query(
       `
         UPDATE agendamentos
-        SET status = 'concluido'
+        SET
+          status = 'concluido',
+          updated_at = NOW()
         WHERE id = $1
           AND barbearia_id = $2
         RETURNING *
@@ -475,7 +554,10 @@ router.post("/agendamento/:id/concluir", requireOperationalUser, asyncHandler(as
             AND nome = $2
           LIMIT 1
         `,
-        [agendamento.barbearia_id, agendamento.servico]
+        [
+          agendamento.barbearia_id,
+          agendamento.servico_nome || agendamento.servico
+        ]
       );
 
       const servicePrice = Number(serviceResult.rows[0]?.preco || 0);
@@ -483,16 +565,26 @@ router.post("/agendamento/:id/concluir", requireOperationalUser, asyncHandler(as
       await client.query(
         `
           INSERT INTO pagamentos_atendimento
-            (agendamento_id, barbearia_id, cliente_nome, cliente_telefone, servico, valor, data_pagamento, status, metodo)
+            (
+              agendamento_id,
+              barbearia_id,
+              cliente_nome,
+              cliente_telefone,
+              servico,
+              valor,
+              data_pagamento,
+              status,
+              metodo
+            )
           VALUES
             ($1, $2, $3, $4, $5, $6, CURRENT_DATE, 'pago', 'presencial')
         `,
         [
           agendamento.id,
           agendamento.barbearia_id,
-          agendamento.nome,
-          agendamento.telefone,
-          agendamento.servico,
+          agendamento.cliente_nome || agendamento.nome,
+          agendamento.cliente_telefone || agendamento.telefone,
+          agendamento.servico_nome || agendamento.servico,
           servicePrice
         ]
       );

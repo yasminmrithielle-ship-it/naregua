@@ -233,7 +233,7 @@ export default function Register() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      navigate("/dashboard", { replace: true });
+      navigate("/app/onboarding", { replace: true });
     }
   }, [isAuthenticated, navigate]);
 
@@ -299,7 +299,7 @@ export default function Register() {
         logoUrl: form.logoUrl.trim(),
         slug: form.slug.trim()
       });
-      navigate("/dashboard", { replace: true });
+      navigate("/app/onboarding", { replace: true });
     } catch (err) {
       setSubmitError(err.message);
     } finally {

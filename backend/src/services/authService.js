@@ -1,6 +1,6 @@
-import { createHash, randomBytes } from "crypto";
 import { pool, query } from "../db.js";
-import { getSessionTtlDays, getSeedConfig } from "../config.js";
+import { getSaasTrialDays, getSeedConfig, getSessionTtlDays } from "../config.js";
+import { signJwt, verifyJwt } from "./jwtService.js";
 import { ensureDefaultServices } from "./serviceCatalog.js";
 import { ensureDefaultPlans } from "./subscriptionCatalog.js";
 import {
@@ -8,12 +8,12 @@ import {
   createBarbershopId,
   provisionBarbershopScaffold
 } from "./barbershopService.js";
+import { createInitialTrialSubscription, ensureDefaultSaasPlans, getCurrentSaasSubscription } from "./saasService.js";
+import { toLegacyRole, toPublicRole } from "./roleService.js";
 
-function hashSessionToken(token) {
-  return createHash("sha256").update(token).digest("hex");
-}
+function buildSessionPayload(row, token, memberships = [], saasSubscription = null) {
+  const publicRole = toPublicRole(row.papel);
 
-function buildSessionPayload(row, token, memberships = []) {
   return {
     token,
     expiresAt: row.expires_at,
@@ -24,7 +24,7 @@ function buildSessionPayload(row, token, memberships = []) {
     },
     membership: {
       id: row.membership_id,
-      role: row.papel,
+      role: publicRole,
       barbershopId: row.barbearia_id
     },
     barbershop: {
@@ -32,15 +32,16 @@ function buildSessionPayload(row, token, memberships = []) {
       name: row.barbearia_nome,
       slug: row.barbearia_slug,
       logoUrl: row.logo_url,
-      phone: row.phone,
+      phone: row.telefone || row.phone,
       whatsappNumber: row.whatsapp_number,
       address: row.address,
-      subscriptionPlan: row.subscription_plan,
+      subscriptionPlan: row.plano || row.subscription_plan,
       status: row.barbearia_status,
       timezone: row.timezone,
-      primaryColor: row.primary_color,
+      primaryColor: row.cor_primaria || row.primary_color,
       accentColor: row.accent_color
     },
+    saasSubscription,
     memberships
   };
 }
@@ -56,19 +57,19 @@ async function listMemberships(executor, userId) {
         b.nome AS barbearia_nome,
         b.slug AS barbearia_slug,
         b.logo_url,
-        b.phone,
+        COALESCE(b.telefone, b.phone) AS telefone,
         b.whatsapp_number,
         b.address,
-        b.subscription_plan,
+        COALESCE(b.plano, b.subscription_plan) AS plano,
         b.status AS barbearia_status,
         b.timezone,
-        b.primary_color,
+        COALESCE(b.cor_primaria, b.primary_color) AS cor_primaria,
         b.accent_color
       FROM barbearia_usuarios bu
       INNER JOIN barbearias b
         ON b.id = bu.barbearia_id
       WHERE bu.usuario_id = $1
-        AND b.status = 'active'
+        AND b.status IN ('ativo', 'teste', 'active')
       ORDER BY bu.is_padrao DESC, bu.created_at ASC
     `,
     [userId]
@@ -76,20 +77,20 @@ async function listMemberships(executor, userId) {
 
   return result.rows.map((row) => ({
     id: row.id,
-    role: row.papel,
+    role: toPublicRole(row.papel),
     isDefault: row.is_padrao,
     barbershop: {
       id: row.barbearia_id,
       name: row.barbearia_nome,
       slug: row.barbearia_slug,
       logoUrl: row.logo_url,
-      phone: row.phone,
+      phone: row.telefone,
       whatsappNumber: row.whatsapp_number,
       address: row.address,
-      subscriptionPlan: row.subscription_plan,
+      subscriptionPlan: row.plano,
       status: row.barbearia_status,
       timezone: row.timezone,
-      primaryColor: row.primary_color,
+      primaryColor: row.cor_primaria,
       accentColor: row.accent_color
     }
   }));
@@ -111,43 +112,17 @@ function selectMembership(memberships, { barbershopId, barbershopSlug } = {}) {
   return memberships.find((item) => item.isDefault) || memberships[0];
 }
 
-async function createSession(
-  executor,
-  { userId, barbershopId, role, userAgent = null, ipAddress = null }
-) {
-  const token = randomBytes(48).toString("hex");
-  const tokenHash = hashSessionToken(token);
-  const ttlDays = getSessionTtlDays();
+function buildJwtToken({ userId, barbershopId, role }) {
+  const expiresInSeconds = Number(getSessionTtlDays()) * 24 * 60 * 60;
 
-  const result = await executor.query(
-    `
-      INSERT INTO sessoes_usuario (
-        usuario_id,
-        barbearia_id,
-        papel,
-        token_hash,
-        expires_at,
-        user_agent,
-        ip_address
-      )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        NOW() + make_interval(days => $5),
-        $6,
-        $7
-      )
-      RETURNING *
-    `,
-    [userId, barbershopId, role, tokenHash, ttlDays, userAgent, ipAddress]
+  return signJwt(
+    {
+      userId,
+      barbeariaId: barbershopId,
+      role: toPublicRole(role)
+    },
+    { expiresInSeconds }
   );
-
-  return {
-    token,
-    row: result.rows[0]
-  };
 }
 
 export async function getSessionFromToken(token) {
@@ -155,76 +130,77 @@ export async function getSessionFromToken(token) {
     return null;
   }
 
-  const tokenHash = hashSessionToken(token);
+  const payload = verifyJwt(token);
   const result = await query(
     `
       SELECT
-        s.id AS sessao_id,
-        s.usuario_id,
-        s.barbearia_id,
-        s.papel,
-        s.expires_at,
+        u.id AS usuario_id,
         u.nome AS usuario_nome,
         u.email AS usuario_email,
+        COALESCE(u.ativo, u.status = 'active') AS usuario_ativo,
         bu.id AS membership_id,
+        bu.papel,
+        b.id AS barbearia_id,
         b.nome AS barbearia_nome,
         b.slug AS barbearia_slug,
         b.logo_url,
-        b.phone,
+        COALESCE(b.telefone, b.phone) AS telefone,
         b.whatsapp_number,
         b.address,
-        b.subscription_plan,
+        COALESCE(b.plano, b.subscription_plan) AS plano,
         b.status AS barbearia_status,
         b.timezone,
-        b.primary_color,
+        COALESCE(b.cor_primaria, b.primary_color) AS cor_primaria,
         b.accent_color
-      FROM sessoes_usuario s
-      INNER JOIN usuarios u
-        ON u.id = s.usuario_id
+      FROM usuarios u
       INNER JOIN barbearia_usuarios bu
-        ON bu.usuario_id = s.usuario_id
-       AND bu.barbearia_id = s.barbearia_id
+        ON bu.usuario_id = u.id
       INNER JOIN barbearias b
-        ON b.id = s.barbearia_id
-      WHERE s.token_hash = $1
-        AND s.expires_at > NOW()
-        AND u.status = 'active'
+        ON b.id = bu.barbearia_id
+      WHERE u.id = $1
+        AND bu.barbearia_id = $2
       LIMIT 1
     `,
-    [tokenHash]
+    [payload.userId, payload.barbeariaId]
   );
 
   const row = result.rows[0];
 
-  if (!row) {
+  if (!row || !row.usuario_ativo) {
     return null;
   }
 
   await query(
     `
-      UPDATE sessoes_usuario
-      SET last_seen_at = NOW()
+      UPDATE usuarios
+      SET
+        last_login_at = NOW(),
+        barbearia_id = $2,
+        role = $3,
+        updated_at = NOW()
       WHERE id = $1
     `,
-    [row.sessao_id]
-  );
+    [row.usuario_id, row.barbearia_id, toPublicRole(row.papel)]
+  ).catch(() => null);
 
-  const memberships = await listMemberships({ query }, row.usuario_id);
-  return buildSessionPayload(row, token, memberships);
+  const [memberships, saasSubscription] = await Promise.all([
+    listMemberships({ query }, row.usuario_id),
+    getCurrentSaasSubscription(row.barbearia_id)
+  ]);
+
+  return buildSessionPayload(
+    {
+      ...row,
+      expires_at: new Date(payload.exp * 1000).toISOString()
+    },
+    token,
+    memberships,
+    saasSubscription
+  );
 }
 
-export async function revokeSession(token) {
-  if (!token) {
-    return;
-  }
-
-  await query(
-    `
-      DELETE FROM sessoes_usuario
-      WHERE token_hash = $1
-    `,
-    [hashSessionToken(token)]
-  );
+export async function revokeSession(_token) {
+  return;
 }
 
 export async function switchSessionBarbershop(token, nextBarbershopId) {
@@ -242,28 +218,20 @@ export async function switchSessionBarbershop(token, nextBarbershopId) {
     throw new Error("Voce nao possui acesso a esta barbearia.");
   }
 
-  await query(
-    `
-      UPDATE sessoes_usuario
-      SET
-        barbearia_id = $1,
-        papel = $2,
-        last_seen_at = NOW()
-      WHERE token_hash = $3
-    `,
-    [membership.barbershop.id, membership.role, hashSessionToken(token)]
-  );
+  const nextToken = buildJwtToken({
+    userId: session.user.id,
+    barbershopId: membership.barbershop.id,
+    role: membership.role
+  });
 
-  return getSessionFromToken(token);
+  return getSessionFromToken(nextToken);
 }
 
 export async function loginUser({
   email,
   password,
   barbershopId,
-  barbershopSlug,
-  userAgent = null,
-  ipAddress = null
+  barbershopSlug
 }) {
   const normalizedEmail = String(email || "").trim().toLowerCase();
 
@@ -278,7 +246,8 @@ export async function loginUser({
         nome,
         email,
         status,
-        password_hash = crypt($2, password_hash) AS password_ok
+        COALESCE(ativo, status = 'active') AS ativo,
+        COALESCE(senha_hash, password_hash) = crypt($2, COALESCE(senha_hash, password_hash)) AS password_ok
       FROM usuarios
       WHERE LOWER(email) = $1
       LIMIT 1
@@ -292,7 +261,7 @@ export async function loginUser({
     throw new Error("Credenciais invalidas.");
   }
 
-  if (user.status !== "active") {
+  if (!user.ativo) {
     throw new Error("Usuario inativo.");
   }
 
@@ -306,59 +275,27 @@ export async function loginUser({
     throw new Error("Nenhuma barbearia ativa vinculada a este usuario.");
   }
 
-  const client = await pool.connect();
+  await query(
+    `
+      UPDATE usuarios
+      SET
+        last_login_at = NOW(),
+        barbearia_id = $2,
+        role = $3,
+        ativo = true,
+        status = 'active'
+      WHERE id = $1
+    `,
+    [user.id, selectedMembership.barbershop.id, selectedMembership.role]
+  );
 
-  try {
-    await client.query("BEGIN");
-    await client.query(
-      `
-        UPDATE usuarios
-        SET last_login_at = NOW()
-        WHERE id = $1
-      `,
-      [user.id]
-    );
+  const token = buildJwtToken({
+    userId: user.id,
+    barbershopId: selectedMembership.barbershop.id,
+    role: selectedMembership.role
+  });
 
-    const session = await createSession(client, {
-      userId: user.id,
-      barbershopId: selectedMembership.barbershop.id,
-      role: selectedMembership.role,
-      userAgent,
-      ipAddress
-    });
-
-    await client.query("COMMIT");
-
-    return buildSessionPayload(
-      {
-        ...session.row,
-        usuario_id: user.id,
-        usuario_nome: user.nome,
-        usuario_email: user.email,
-        membership_id: selectedMembership.id,
-        papel: selectedMembership.role,
-        barbearia_id: selectedMembership.barbershop.id,
-        barbearia_nome: selectedMembership.barbershop.name,
-        barbearia_slug: selectedMembership.barbershop.slug,
-        logo_url: selectedMembership.barbershop.logoUrl,
-        phone: selectedMembership.barbershop.phone,
-        whatsapp_number: selectedMembership.barbershop.whatsappNumber,
-        address: selectedMembership.barbershop.address,
-        subscription_plan: selectedMembership.barbershop.subscriptionPlan,
-        barbearia_status: selectedMembership.barbershop.status,
-        timezone: selectedMembership.barbershop.timezone,
-        primary_color: selectedMembership.barbershop.primaryColor,
-        accent_color: selectedMembership.barbershop.accentColor
-      },
-      session.token,
-      memberships
-    );
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+  return getSessionFromToken(token);
 }
 
 export async function registerOwnerAccount({
@@ -370,9 +307,7 @@ export async function registerOwnerAccount({
   phone = null,
   whatsappNumber = null,
   address = null,
-  logoUrl = null,
-  userAgent = null,
-  ipAddress = null
+  logoUrl = null
 }) {
   const normalizedEmail = String(email || "").trim().toLowerCase();
   const normalizedName = String(name || "").trim();
@@ -400,17 +335,41 @@ export async function registerOwnerAccount({
 
   try {
     await client.query("BEGIN");
+    await ensureDefaultSaasPlans(client);
 
     const barbershopId = createBarbershopId();
     const uniqueSlug = await buildUniqueSlug(slug || normalizedBarbershopName, client);
 
     const userResult = await client.query(
       `
-        INSERT INTO usuarios (nome, email, password_hash, status)
-        VALUES ($1, $2, crypt($3, gen_salt('bf')), 'active')
+        WITH hashed AS (
+          SELECT crypt($3, gen_salt('bf')) AS password_hash
+        )
+        INSERT INTO usuarios (
+          nome,
+          email,
+          password_hash,
+          senha_hash,
+          status,
+          ativo,
+          role,
+          barbearia_id,
+          criado_em
+        )
+        SELECT
+          $1,
+          $2,
+          hashed.password_hash,
+          hashed.password_hash,
+          'active',
+          true,
+          'owner',
+          $4,
+          NOW()
+        FROM hashed
         RETURNING id, nome, email
       `,
-      [normalizedName, normalizedEmail, password]
+      [normalizedName, normalizedEmail, password, barbershopId]
     );
 
     const user = userResult.rows[0];
@@ -423,8 +382,8 @@ export async function registerOwnerAccount({
       phone,
       whatsappNumber,
       address,
-      subscriptionPlan: "starter",
-      sessionName: uniqueSlug
+      subscriptionPlan: "plano",
+      sessionName: `barbearia-${barbershopId}`
     });
 
     await client.query(
@@ -442,18 +401,16 @@ export async function registerOwnerAccount({
 
     await ensureDefaultServices(barbershopId, client);
     await ensureDefaultPlans(barbershopId, client);
-
-    const session = await createSession(client, {
-      userId: user.id,
-      barbershopId,
-      role: "owner",
-      userAgent,
-      ipAddress
-    });
-
+    await createInitialTrialSubscription(client, barbershopId, getSaasTrialDays());
     await client.query("COMMIT");
 
-    return getSessionFromToken(session.token);
+    const token = buildJwtToken({
+      userId: user.id,
+      barbershopId,
+      role: "owner"
+    });
+
+    return getSessionFromToken(token);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -464,6 +421,11 @@ export async function registerOwnerAccount({
 
 export async function ensureSeedData() {
   const seed = getSeedConfig();
+
+  if (!seed) {
+    return;
+  }
+
   const countResult = await query(
     `
       SELECT COUNT(*)::int AS total
