@@ -1,0 +1,68 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: barbergo-caddy
+    depends_on:
+      - app
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?PUBLIC_HOST obrigatorio}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - barbergo_caddy_data:/data
+      - barbergo_caddy_config:/config
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: barbergo-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-barbergo}
+      POSTGRES_USER: ${POSTGRES_USER:-barbergo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD obrigatorio}
+    volumes:
+      - barbergo_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-barbergo} -d ${POSTGRES_DB:-barbergo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      args:
+        VITE_API_URL: ""
+        VITE_CHATBOT_URL: ""
+    image: barbergo-app:latest
+    container_name: barbergo-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env.production
+    environment:
+      PORT: 5000
+      DATABASE_URL: postgres://${POSTGRES_USER:-barbergo}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-barbergo}
+      DATABASE_SSL: "false"
+      API_URL: ${PUBLIC_URL:?PUBLIC_URL obrigatorio}
+      CORS_ORIGINS: ${PUBLIC_URL},capacitor://localhost,http://localhost,http://localhost:5000
+      CHATBOT_PUBLIC_URL: ${PUBLIC_URL}
+      CHATBOT_WEBHOOK_URL: ${PUBLIC_URL}/webhook
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+    ports:
+      - "127.0.0.1:${APP_PORT:-5000}:5000"
+    volumes:
+      - barbergo_whatsapp_auth:/app/chatbot/.wwebjs_auth
+      - barbergo_whatsapp_cache:/app/chatbot/.wwebjs_cache
+    restart: unless-stopped
+
+volumes:
+  barbergo_caddy_data:
+  barbergo_caddy_config:
+  barbergo_postgres_data:
+  barbergo_whatsapp_auth:
+  barbergo_whatsapp_cache:

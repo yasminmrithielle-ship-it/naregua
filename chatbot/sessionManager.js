@@ -98,6 +98,8 @@ async function loadConnectionContextBySessionName(sessionName) {
 
 function createClient(barbeariaId) {
   const dataPath = getSessionFolderPath(barbeariaId);
+  const executablePath =
+    process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_BIN || undefined;
 
   return new Client({
     authStrategy: new LocalAuth({
@@ -105,6 +107,7 @@ function createClient(barbeariaId) {
     }),
     puppeteer: {
       headless: true,
+      executablePath,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",

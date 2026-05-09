@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node robo.js",
-    "postinstall": "npx puppeteer browsers install chrome"
+    "postinstall": "node scripts/install-browser.cjs"
   },
   "dependencies": {
     "puppeteer": "^24.26.1",
